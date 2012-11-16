@@ -187,6 +187,15 @@ static void send_router_advert(struct relayd_event *event)
 		//if (cnt == 0)
 		//	adv.rdnss_addr = addr->sin6_addr;
 
+		bool already_announced = false;
+		for (size_t i = 0; i < cnt; ++i)
+			if (!memcmp(&adv.prefix[i].nd_opt_pi_prefix,
+					&addr->sin6_addr, 8))
+				already_announced = true;
+
+		if (already_announced)
+			continue;
+
 		adv.prefix[cnt].nd_opt_pi_type = ND_OPT_PREFIX_INFORMATION;
 		adv.prefix[cnt].nd_opt_pi_len = 4;
 		adv.prefix[cnt].nd_opt_pi_prefix_len = 64;
