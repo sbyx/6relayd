@@ -15,6 +15,9 @@
  */
 
 #include <errno.h>
+#include <fcntl.h>
+#include <signal.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
 #include <ifaddrs.h>
@@ -34,10 +37,12 @@ static int open_icmpv6_socket(struct icmp6_filter *filt,
 static void handle_icmpv6(void *addr, void *data, size_t len,
 		struct relayd_interface *iface);
 static void send_router_advert(struct relayd_event *event);
+static void sigusr1_refresh(int signal);
 
 static struct relayd_event router_discovery_event = {-1, NULL, handle_icmpv6};
 
 static const struct relayd_config *config = NULL;
+static bool in_shutdown = false;
 
 
 
@@ -70,6 +75,9 @@ int init_router_discovery_relay(const struct relayd_config *relayd_config)
 			relayd_register_event(&iface->timer_rs);
 			send_router_advert(&iface->timer_rs);
 		}
+
+		// Get informed when addresses change
+		signal(SIGUSR1, sigusr1_refresh);
 	} else if (config->enable_router_discovery_relay) {
 		struct ipv6_mreq an = {ALL_IPV6_NODES, config->master.ifindex};
 		setsockopt(router_discovery_event.socket, IPPROTO_IPV6,
@@ -89,8 +97,29 @@ int init_router_discovery_relay(const struct relayd_config *relayd_config)
 }
 
 
+void deinit_router_discovery_relay(void)
+{
+	if (config->enable_router_discovery_server) {
+		in_shutdown = true;
+		for (size_t i = 0; i < config->slavecount; ++i)
+			send_router_advert(&config->slaves[i].timer_rs);
+	}
+}
+
+
+// Signal handler to resend all RDs
+static void sigusr1_refresh(_unused int signal)
+{
+	struct itimerspec its = {{0, 0}, {1, 0}};
+	for (size_t i = 0; i < config->slavecount; ++i)
+		timerfd_settime(config->slaves[i].timer_rs.socket,
+				0, &its, NULL);
+}
+
+
 // Create an ICMPv6 socket and setup basic attributes
-static int open_icmpv6_socket(struct icmp6_filter *filt, struct ipv6_mreq *slave_mreq)
+static int open_icmpv6_socket(struct icmp6_filter *filt,
+		struct ipv6_mreq *slave_mreq)
 {
 	int sock = socket(AF_INET6, SOCK_RAW | SOCK_CLOEXEC, IPPROTO_ICMPV6);
 	if (sock < 0)
@@ -143,6 +172,30 @@ static void handle_icmpv6(_unused void *addr, void *data, size_t len,
 }
 
 
+// Detect whether a default route exists
+static bool have_default_route(void)
+{
+	FILE *fp = fopen("/proc/net/ipv6_route", "r");
+	if (!fp)
+		return false;
+
+	char line[512], ifname[16];
+	bool found = false;
+	while (fgets(line, sizeof(line), fp)) {
+		if (sscanf(line, "00000000000000000000000000000000 00 "
+				"00000000000000000000000000000000 00 "
+				"%*s %*s %*s %*s %*s %15s", ifname) &&
+				strcmp(ifname, "lo")) {
+			found = true;
+			break;
+		}
+	}
+
+	fclose(fp);
+	return found;
+}
+
+
 // Router Advert server mode
 static void send_router_advert(struct relayd_event *event)
 {
@@ -157,7 +210,7 @@ static void send_router_advert(struct relayd_event *event)
 		struct nd_opt_mtu mtu;
 		//struct icmpv6_opt rdnss;
 		//struct in6_addr rdnss_addr;
-		struct nd_opt_prefix_info prefix[4];
+		struct nd_opt_prefix_info prefix[RELAYD_MAX_PREFIXES * 2];
 	} adv = {
 		.h = {{.icmp6_type = ND_ROUTER_ADVERT, .icmp6_code = 0}, 0, 0},
 		.lladdr = {ND_OPT_SOURCE_LINKADDR, 1, {0}},
@@ -165,14 +218,27 @@ static void send_router_advert(struct relayd_event *event)
 		//.rdnss = {ND_OPT_RECURSIVE_DNS, 3, {0, 0, 255, 255, 255, 255}},
 	};
 	adv.h.nd_ra_flags_reserved = ND_RA_FLAG_OTHER;
-	adv.h.nd_ra_router_lifetime = htons(3 * MaxRtrAdvInterval);
 	memcpy(adv.lladdr.data, iface->mac, sizeof(adv.lladdr.data));
 
-	struct ifaddrs *ifaddrs;
-	if (getifaddrs(&ifaddrs))
-		return;
 
-	size_t cnt = 0; // Construct Prefix Information options
+	// If not currently shutting down
+	struct ifaddrs *ifaddrs = NULL;
+	if (!in_shutdown) {
+		if (getifaddrs(&ifaddrs))
+			return;
+
+		if (have_default_route())
+			adv.h.nd_ra_router_lifetime =
+					htons(3 * MaxRtrAdvInterval);
+	}
+
+
+	// Construct Prefix Information options
+	bool default_router = false;
+	size_t cnt = iface->last_rs_count;
+	memcpy(adv.prefix, iface->last_rs,
+			iface->last_rs_count * sizeof(adv.prefix[0]));
+
 	for (struct ifaddrs *c = ifaddrs; c; c = c->ifa_next) {
 		if (cnt >= ARRAY_SIZE(adv.prefix))
 			break;
@@ -184,14 +250,25 @@ static void send_router_advert(struct relayd_event *event)
 		if (IN6_IS_ADDR_LINKLOCAL(&addr->sin6_addr))
 			continue;
 
+		if (config->always_announce_default_router ||
+				(addr->sin6_addr.s6_addr[0] & 0xfe) != 0xfc)
+			default_router = true;
+
 		//if (cnt == 0)
 		//	adv.rdnss_addr = addr->sin6_addr;
 
 		bool already_announced = false;
-		for (size_t i = 0; i < cnt; ++i)
+		for (size_t i = 0; i < cnt; ++i) {
 			if (!memcmp(&adv.prefix[i].nd_opt_pi_prefix,
-					&addr->sin6_addr, 8))
+					&addr->sin6_addr, 8)) {
+				adv.prefix[i].nd_opt_pi_valid_time =
+						htonl(3 * MaxRtrAdvInterval);
+				adv.prefix[i].nd_opt_pi_preferred_time =
+						htonl(2 * MaxRtrAdvInterval);
 				already_announced = true;
+			}
+		}
+
 
 		if (already_announced)
 			continue;
@@ -207,16 +284,36 @@ static void send_router_advert(struct relayd_event *event)
 				htonl(2 * MaxRtrAdvInterval);
 		memcpy(&adv.prefix[cnt].nd_opt_pi_prefix,
 				&addr->sin6_addr, 8);
+
 		++cnt;
 	}
 
-	freeifaddrs(ifaddrs);
+	if (ifaddrs)
+		freeifaddrs(ifaddrs);
+
+	if (!default_router)
+		adv.h.nd_ra_router_lifetime = 0;
 
 	struct iovec iov = {&adv, (uint8_t*)&adv.prefix[cnt] - (uint8_t*)&adv};
 	struct sockaddr_in6 all_nodes = {AF_INET6, 0, 0, ALL_IPV6_NODES, 0};
 	relayd_forward_packet(router_discovery_event.socket,
 			&all_nodes, &iov, 1, iface);
 
+	// Remember last announced prefixes
+	size_t lcnt = 0;
+	memset(iface->last_rs, 0, sizeof(iface->last_rs));
+	for (size_t i = 0; i < cnt && lcnt < ARRAY_SIZE(iface->last_rs); ++i) {
+		struct nd_opt_prefix_info *p = &adv.prefix[i];
+		if (p->nd_opt_pi_valid_time == 0)
+			continue;
+
+		iface->last_rs[lcnt] = *p;
+		iface->last_rs[lcnt].nd_opt_pi_preferred_time = 0;
+		iface->last_rs[lcnt].nd_opt_pi_valid_time = 0;
+
+		++lcnt;
+	}
+	iface->last_rs_count = lcnt;
 
 	// Rearm timer
 	struct itimerspec val = {{0,0}, {0,0}};

@@ -67,8 +67,7 @@ if simple stateless operation and no customization is required.
 
 0. Server mode is used as a minimalistic alternative for full-blown servers
    like radvd or ISC DHCP if simplicity or a small footprint matter.
-   Note: The master interface is unused in this mode. It should be set to any
-   valid interface on the router (e.g. lo).
+   Note: The master interface is unused in this mode. It should be set to '~'.
 
 1. If there are non-local addresses assigned to the slave interface when a
    router solicitation is received, said prefixes are announced automatically

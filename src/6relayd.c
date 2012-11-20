@@ -58,7 +58,7 @@ int main(int argc, char* const argv[])
 	bool daemonize = false;
 	int verbosity = 0;
 	int c;
-	while ((c = getopt(argc, argv, "ASR:D:NFslnrp:dvh")) != -1) {
+	while ((c = getopt(argc, argv, "ASR:D:NFslunrp:dvh")) != -1) {
 		switch (c) {
 		case 'A':
 			config.enable_router_discovery_relay = true;
@@ -109,6 +109,10 @@ int main(int argc, char* const argv[])
 
 		case 'l':
 			config.force_address_assignment = true;
+			break;
+
+		case 'u':
+			config.always_announce_default_router = true;
 			break;
 
 		case 'n':
@@ -172,6 +176,7 @@ int main(int argc, char* const argv[])
 	}
 
 	srandom(clock() ^ getpid());
+	signal(SIGUSR1, SIG_IGN);
 
 	if (init_router_discovery_relay(&config))
 		return 4;
@@ -229,6 +234,7 @@ int main(int argc, char* const argv[])
 		relayd_sysctl_interface("all", "forwarding", "0");
 
 	deinit_ndp_proxy();
+	deinit_router_discovery_relay();
 	free(config.slaves);
 	return 0;
 }
@@ -238,7 +244,7 @@ static int print_usage(const char *name)
 {
 	fprintf(stderr,
 	"Usage: %s [options] <master> [[~]<slave1> [[~]<slave2> [...]]]\n"
-	"\nNote: to use server features only (no relaying) set master to lo.\n"
+	"\nNote: to use server features only (no relaying) set master to '~'.\n"
 	"\nFeatures:\n"
 	"	-A		Automatic relay (defaults: RrelayDrelayNFslr)\n"
 	"	-S		Automatic server (defaults: RserverDserver)\n"
@@ -254,6 +260,7 @@ static int print_usage(const char *name)
 	"\nFeature options:\n"
 	"	-s		Send initial RD-Solicitation to <master>\n"
 	"	-l		RD: Force local address assignment\n"
+	"	-u		RD: Assume default router even with ULA only\n"
 	"	-n		RD/DHCPv6: always rewrite name server\n"
 	"	-r		NDP: learn routes to neighbors\n"
 	"	slave prefix ~	NDP: don't proxy NDP for hosts and only\n"
@@ -278,6 +285,9 @@ static void set_stop(_unused int signal)
 static int open_interface(struct relayd_interface *iface,
 		const char *ifname, bool external)
 {
+	if (ifname[0] == 0 && iface == &config.master)
+		return 0; // Skipped
+
 	int status = 0;
 	int sock = socket(AF_INET6, SOCK_DGRAM, 0);
 

@@ -26,6 +26,7 @@
 #define ND_OPT_RECURSIVE_DNS 25
 
 #define RELAYD_BUFFER_SIZE 1536
+#define RELAYD_MAX_PREFIXES 8
 
 #define _unused __attribute__((unused))
 
@@ -55,6 +56,8 @@ struct relayd_interface {
 	uint32_t mtu;
 
 	struct relayd_event timer_rs;
+	struct nd_opt_prefix_info last_rs[RELAYD_MAX_PREFIXES];
+	size_t last_rs_count;
 };
 
 
@@ -72,7 +75,7 @@ struct relayd_config {
 	bool send_router_solicitation;
 	bool always_rewrite_dns;
 	bool compat_broken_dhcpv6;
-
+	bool always_announce_default_router;
 
 	struct relayd_interface master;
 	struct relayd_interface *slaves;
@@ -98,4 +101,5 @@ int init_router_discovery_relay(const struct relayd_config *relayd_config);
 int init_dhcpv6_relay(const struct relayd_config *relayd_config);
 int init_ndp_proxy(const struct relayd_config *relayd_config);
 
+void deinit_router_discovery_relay(void);
 void deinit_ndp_proxy();
