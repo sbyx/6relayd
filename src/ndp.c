@@ -72,16 +72,8 @@ int init_ndp_proxy(const struct relayd_config *relayd_config)
 	config = relayd_config;
 
 	// Setup netlink socket
-	rtnl_event.socket = socket(AF_NETLINK, SOCK_RAW | SOCK_CLOEXEC,
-			NETLINK_ROUTE);
-
-	// Connect to the kernel netlink interface
-	struct sockaddr_nl nl = {.nl_family = AF_NETLINK};
-	if (connect(rtnl_event.socket, (struct sockaddr*)&nl, sizeof(nl))) {
-		syslog(LOG_ERR, "Failed to connect to kernel rtnetlink: %s",
-				strerror(errno));
+	if ((rtnl_event.socket = relayd_open_rtnl_socket()) < 0)
 		return -1;
-	}
 
 	// Receive netlink neighbor and ip-address events
 	uint32_t group = RTNLGRP_IPV6_IFADDR;

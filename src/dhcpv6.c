@@ -248,9 +248,11 @@ static void handle_client_request(void *addr, void *data, size_t len,
 		update_nested_message(data, len, iov[1].iov_len +
 				iov[2].iov_len - (4 + opts_end - opts));
 
-	if (relayd_get_interface_address(&dest.addr, iface->ifname, true))
+	struct relayd_ipaddr ipaddr;
+	if (relayd_get_interface_addresses(iface->ifindex, &ipaddr, 1) != 1)
 		return; // Failed to detect a local address
 
+	dest.addr = ipaddr.addr;
 	relayd_forward_packet(dhcpv6_event.socket, addr, iov, 4, iface);
 }
 
@@ -350,7 +352,6 @@ static void relay_server_response(uint8_t *data, size_t len)
 		return;
 
 	bool is_authenticated = false;
-	bool rewrite_dns = false;
 	struct in6_addr *dns_ptr = NULL;
 	size_t dns_count = 0;
 
@@ -363,15 +364,8 @@ static void relay_server_response(uint8_t *data, size_t len)
 
 		dhcpv6_for_each_option(h->options, end, otype, olen, odata) {
 			if (otype == DHCPV6_OPT_DNS_SERVERS && olen >= 16) {
-				rewrite_dns = config->always_rewrite_dns;
 				dns_ptr = (struct in6_addr*)odata;
 				dns_count = olen / 16;
-
-				// If there is a link-local DNS we must rewrite
-				for (size_t i = 0; !rewrite_dns &&
-						i < dns_count; ++i)
-					if (IN6_IS_ADDR_LINKLOCAL(&dns_ptr[i]))
-						rewrite_dns = true;
 			} else if (otype == DHCPV6_OPT_AUTH) {
 				is_authenticated = true;
 			}
@@ -379,18 +373,17 @@ static void relay_server_response(uint8_t *data, size_t len)
 	}
 
 	// Rewrite DNS servers if requested
-	if (rewrite_dns && dns_ptr && dns_count > 0) {
+	if (config->always_rewrite_dns && dns_ptr && dns_count > 0) {
 		if (is_authenticated)
 			return; // Impossible to rewrite
 
-		if (relayd_get_interface_address(&dns_ptr[0],
-				iface->ifname, true))
+		struct relayd_ipaddr ip;
+		if (relayd_get_interface_addresses(iface->ifindex, &ip, 1) < 1)
 			return; // Unable to get interface address
 
 		// Copy over any other addresses
-		for (size_t i = 1; i < dns_count; ++i)
-			memcpy(&dns_ptr[i], &dns_ptr[0],
-					sizeof(struct in6_addr));
+		for (size_t i = 0; i < dns_count; ++i)
+			memcpy(&dns_ptr[i], &ip.addr, sizeof(ip.addr));
 	}
 
 	struct iovec iov = {payload_data, payload_len};
@@ -434,17 +427,18 @@ static void relay_client_request(struct sockaddr_in6 *source,
 	memcpy(&hdr.interface_id_data, &ifindex, sizeof(ifindex));
 
 	// Detect public IP of slave interface to use as link-address
-	if (relayd_get_interface_address(&hdr.link_address,
-			iface->ifname, false)) {
+	struct relayd_ipaddr ip;
+	if (relayd_get_interface_addresses(iface->ifindex, &ip, 1) < 1) {
 		// No suitable address! Is the slave not configured yet?
 		// Detect public IP of master interface and use it instead
 		// This is WRONG and probably violates the RFC. However
 		// otherwise we have a hen and egg problem because the
 		// slave-interface cannot be auto-configured.
-		if (relayd_get_interface_address(&hdr.link_address,
-				config->master.ifname, false))
+		if (relayd_get_interface_addresses(config->master.ifindex,
+				&ip, 1) < 1)
 			return; // Could not obtain a suitable address
 	}
+	memcpy(&hdr.link_address, &ip.addr, sizeof(hdr.link_address));
 
 	struct sockaddr_in6 dhcpv6_servers = {AF_INET6,
 			htons(DHCPV6_SERVER_PORT), 0, ALL_DHCPV6_SERVERS, 0};

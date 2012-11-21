@@ -26,14 +26,13 @@
 #include <net/if.h>
 #include <netinet/ip6.h>
 #include <netpacket/packet.h>
-#include <linux/netlink.h>
+#include <linux/rtnetlink.h>
 
 #include <sys/socket.h>
 #include <sys/ioctl.h>
 #include <sys/epoll.h>
 #include <sys/types.h>
 
-#include <ifaddrs.h>
 #include <fcntl.h>
 
 #include "6relayd.h"
@@ -44,6 +43,9 @@ static struct relayd_config config;
 static int epoll;
 static size_t epoll_registered = 0;
 static volatile bool do_stop = false;
+
+static int rtnl_socket = -1;
+static int rtnl_seq = 0;
 
 static int print_usage(const char *name);
 static void set_stop(_unused int signal);
@@ -156,6 +158,11 @@ int main(int argc, char* const argv[])
 
 	if ((epoll = epoll_create1(EPOLL_CLOEXEC)) < 0) {
 		syslog(LOG_ERR, "Unable to open epoll: %s", strerror(errno));
+		return 2;
+	}
+
+	if ((rtnl_socket = relayd_open_rtnl_socket()) < 0) {
+		syslog(LOG_ERR, "Unable to open socket: %s", strerror(errno));
 		return 2;
 	}
 
@@ -328,6 +335,22 @@ out:
 }
 
 
+int relayd_open_rtnl_socket(void)
+{
+	int sock = socket(AF_NETLINK, SOCK_RAW | SOCK_CLOEXEC, NETLINK_ROUTE);
+
+	// Connect to the kernel netlink interface
+	struct sockaddr_nl nl = {.nl_family = AF_NETLINK};
+	if (connect(sock, (struct sockaddr*)&nl, sizeof(nl))) {
+		syslog(LOG_ERR, "Failed to connect to kernel rtnetlink: %s",
+				strerror(errno));
+		return -1;
+	}
+
+	return sock;
+}
+
+
 int relayd_sysctl_interface(const char *ifname, const char *option,
 		const char *data)
 {
@@ -400,36 +423,59 @@ ssize_t relayd_forward_packet(int socket, struct sockaddr_in6 *dest,
 
 
 // Detect an IPV6-address currently assigned to the given interface
-int relayd_get_interface_address(struct in6_addr *dest,
-		const char *ifname, bool allow_linklocal)
+ssize_t relayd_get_interface_addresses(int ifindex,
+		struct relayd_ipaddr *addrs, size_t cnt)
 {
-	bool found_address = false;
-	struct ifaddrs *ifaddrs;
-	if (getifaddrs(&ifaddrs))
-		return -1;
+	struct {
+		struct nlmsghdr nhm;
+		struct ifaddrmsg ifa;
+	} req = {{sizeof(req), RTM_GETADDR, NLM_F_REQUEST | NLM_F_DUMP,
+			++rtnl_seq, 0}, {AF_INET6, 0, 0, 0, ifindex}};
+	if (send(rtnl_socket, &req, sizeof(req), 0) < (ssize_t)sizeof(req))
+		return 0;
 
-	for (struct ifaddrs *c = ifaddrs; found_address == false && c != NULL;
-			c = c->ifa_next) {
-		if (!c->ifa_addr || c->ifa_addr->sa_family != AF_INET6 ||
-				strcmp(c->ifa_name, ifname))
-			continue; // Skip unrelated
+	uint8_t buf[8192];
+	ssize_t len = 0, ret = 0;
+	struct nlmsghdr *nhm = NULL;
 
-		struct sockaddr_in6 *dst = (struct sockaddr_in6*)c->ifa_addr;
-		if (!allow_linklocal && IN6_IS_ADDR_LINKLOCAL(&dst->sin6_addr))
+	do {
+		if (!NLMSG_OK(nhm, len)) {
+			len = recv(rtnl_socket, buf, sizeof(buf), 0);
+			nhm = (struct nlmsghdr*)buf;
+			if (len < 0 || !NLMSG_OK(nhm, len))
+				continue;
+		}
+
+		// Skip address but keep clearing socket buffer
+		if (ret >= (ssize_t)cnt)
 			continue;
 
-		found_address = true;
-		memcpy(dest, &dst->sin6_addr, sizeof(struct in6_addr));
-	}
+		struct ifaddrmsg *ifa = NLMSG_DATA(nhm);
+		if (ifa->ifa_scope != RT_SCOPE_UNIVERSE)
+			continue;
 
-	freeifaddrs(ifaddrs);
-	if (!found_address) {
-		syslog(LOG_WARNING, "failed to detect suitable "
-				"source address for %s", ifname);
-		return -1;
-	} else {
-		return 0;
-	}
+		struct rtattr *rta = (struct rtattr*)&ifa[1];
+		size_t alen = NLMSG_PAYLOAD(nhm, sizeof(*ifa));
+		memset(&addrs[ret], 0, sizeof(addrs[ret]));
+		addrs[ret].prefix = ifa->ifa_prefixlen;
+
+		while (RTA_OK(rta, alen)) {
+			if (rta->rta_type == IFA_ADDRESS) {
+				memcpy(&addrs[ret].addr, RTA_DATA(rta),
+						sizeof(struct in6_addr));
+			} else if (rta->rta_type == IFA_CACHEINFO) {
+				struct ifa_cacheinfo *ifc = RTA_DATA(rta);
+				addrs[ret].preferred = ifc->ifa_prefered;
+				addrs[ret].valid = ifc->ifa_valid;
+			}
+
+			rta = RTA_NEXT(rta, alen);
+		}
+		++ret;
+	} while ((len < 0 && errno == EINTR) || ((nhm = NLMSG_NEXT(nhm, len))
+			&& nhm->nlmsg_type == RTM_NEWADDR));
+
+	return ret;
 }
 
 

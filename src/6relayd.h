@@ -84,13 +84,22 @@ struct relayd_config {
 };
 
 
+struct relayd_ipaddr {
+	struct in6_addr addr;
+	uint8_t prefix;
+	uint32_t preferred;
+	uint32_t valid;
+};
+
+
 // Exported main functions
+int relayd_open_rtnl_socket(void);
 int relayd_register_event(struct relayd_event *event);
 ssize_t relayd_forward_packet(int socket, struct sockaddr_in6 *dest,
 		struct iovec *iov, size_t iov_len,
 		const struct relayd_interface *iface);
-int relayd_get_interface_address(struct in6_addr *dest,
-		const char *ifname, bool allow_linklocal);
+ssize_t relayd_get_interface_addresses(int ifindex,
+		struct relayd_ipaddr *addrs, size_t cnt);
 struct relayd_interface* relayd_get_interface_by_index(int ifindex);
 int relayd_sysctl_interface(const char *ifname, const char *option,
 		const char *data);

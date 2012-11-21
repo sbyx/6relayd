@@ -20,7 +20,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
-#include <ifaddrs.h>
 #include <stdbool.h>
 #include <sys/timerfd.h>
 
@@ -222,14 +221,16 @@ static void send_router_advert(struct relayd_event *event)
 
 
 	// If not currently shutting down
-	struct ifaddrs *ifaddrs = NULL;
-	if (!in_shutdown) {
-		if (getifaddrs(&ifaddrs))
-			return;
+	struct relayd_ipaddr addrs[RELAYD_MAX_PREFIXES];
+	ssize_t ipcnt = 0;
 
+	if (!in_shutdown) {
 		if (have_default_route())
 			adv.h.nd_ra_router_lifetime =
 					htons(3 * MaxRtrAdvInterval);
+
+		ipcnt = relayd_get_interface_addresses(iface->ifindex,
+				addrs, ARRAY_SIZE(addrs));
 	}
 
 
@@ -239,57 +240,46 @@ static void send_router_advert(struct relayd_event *event)
 	memcpy(adv.prefix, iface->last_rs,
 			iface->last_rs_count * sizeof(adv.prefix[0]));
 
-	for (struct ifaddrs *c = ifaddrs; c; c = c->ifa_next) {
-		if (cnt >= ARRAY_SIZE(adv.prefix))
-			break;
-		else if (!c->ifa_addr || strcmp(c->ifa_name, iface->ifname) ||
-				c->ifa_addr->sa_family != AF_INET6)
-			continue;
-
-		struct sockaddr_in6 *addr = (struct sockaddr_in6*)c->ifa_addr;
-		if (IN6_IS_ADDR_LINKLOCAL(&addr->sin6_addr))
-			continue;
-
-		if (config->always_announce_default_router ||
-				(addr->sin6_addr.s6_addr[0] & 0xfe) != 0xfc)
-			default_router = true;
+	for (ssize_t i = 0; i < ipcnt; ++i) {
+		struct relayd_ipaddr *addr = &addrs[i];
+		if (addr->prefix > 64)
+			continue; // Address not suitable
 
 		//if (cnt == 0)
 		//	adv.rdnss_addr = addr->sin6_addr;
 
-		bool already_announced = false;
+		struct nd_opt_prefix_info *p = NULL;
 		for (size_t i = 0; i < cnt; ++i) {
 			if (!memcmp(&adv.prefix[i].nd_opt_pi_prefix,
-					&addr->sin6_addr, 8)) {
-				adv.prefix[i].nd_opt_pi_valid_time =
-						htonl(3 * MaxRtrAdvInterval);
-				adv.prefix[i].nd_opt_pi_preferred_time =
-						htonl(2 * MaxRtrAdvInterval);
-				already_announced = true;
-			}
+					&addr->addr, 8))
+				p = &adv.prefix[i];
 		}
 
+		if (!p) {
+			if (cnt >= ARRAY_SIZE(adv.prefix))
+				break;
 
-		if (already_announced)
-			continue;
+			p = &adv.prefix[cnt++];
+		}
 
-		adv.prefix[cnt].nd_opt_pi_type = ND_OPT_PREFIX_INFORMATION;
-		adv.prefix[cnt].nd_opt_pi_len = 4;
-		adv.prefix[cnt].nd_opt_pi_prefix_len = 64;
-		adv.prefix[cnt].nd_opt_pi_flags_reserved =
+		if (config->always_announce_default_router ||
+				(addr->addr.s6_addr[0] & 0xfe) != 0xfc)
+			default_router = true;
+
+		memcpy(&p->nd_opt_pi_prefix, &addr->addr, 8);
+		p->nd_opt_pi_type = ND_OPT_PREFIX_INFORMATION;
+		p->nd_opt_pi_len = 4;
+		p->nd_opt_pi_prefix_len = 64;
+		p->nd_opt_pi_flags_reserved =
 				ND_OPT_PI_FLAG_ONLINK | ND_OPT_PI_FLAG_AUTO;
-		adv.prefix[cnt].nd_opt_pi_valid_time =
-				htonl(3 * MaxRtrAdvInterval);
-		adv.prefix[cnt].nd_opt_pi_preferred_time =
-				htonl(2 * MaxRtrAdvInterval);
-		memcpy(&adv.prefix[cnt].nd_opt_pi_prefix,
-				&addr->sin6_addr, 8);
+		p->nd_opt_pi_valid_time = htonl(3 * MaxRtrAdvInterval);
+		p->nd_opt_pi_preferred_time = htonl(2 * MaxRtrAdvInterval);
 
-		++cnt;
+		if (addr->valid) {
+			p->nd_opt_pi_valid_time = htonl(addr->valid);
+			p->nd_opt_pi_preferred_time = htonl(addr->preferred);
+		}
 	}
-
-	if (ifaddrs)
-		freeifaddrs(ifaddrs);
 
 	if (!default_router)
 		adv.h.nd_ra_router_lifetime = 0;
@@ -354,7 +344,6 @@ static void forward_router_advertisement(uint8_t *data, size_t len)
 	// Rewrite options
 	uint8_t *end = data + len;
 	uint8_t *mac_ptr = NULL;
-	bool rewrite_dns = false;
 	struct in6_addr *dns_ptr = NULL;
 	size_t dns_count = 0;
 
@@ -365,14 +354,8 @@ static void forward_router_advertisement(uint8_t *data, size_t len)
 			mac_ptr = opt->data;
 		} else if (opt->type == ND_OPT_RECURSIVE_DNS && opt->len > 1) {
 			// Check if we have to rewrite DNS
-			rewrite_dns = config->always_rewrite_dns;
 			dns_ptr = (struct in6_addr*)&opt->data[6];
 			dns_count = (opt->len - 1) / 2;
-
-			// If there is a link-local DNS we must rewrite
-			for (size_t i = 0; !rewrite_dns && i < dns_count; ++i)
-				if (IN6_IS_ADDR_LINKLOCAL(&dns_ptr[i]))
-					rewrite_dns = true;
 		}
 	}
 
@@ -393,15 +376,16 @@ static void forward_router_advertisement(uint8_t *data, size_t len)
 			memcpy(mac_ptr, config->slaves[i].mac, 6);
 
 		// If we have to rewrite DNS entries
-		if (rewrite_dns && dns_ptr && dns_count > 0) {
-			if (relayd_get_interface_address(&dns_ptr[0],
-					config->slaves[i].ifname, true))
+		if (config->always_rewrite_dns && dns_ptr && dns_count > 0) {
+			struct relayd_ipaddr addr;
+			if (relayd_get_interface_addresses(
+					config->slaves[i].ifindex,
+					&addr, 1) < 1)
 				continue; // Unable to comply
 
 			// Copy over any other addresses
-			for (size_t i = 1; i < dns_count; ++i)
-				memcpy(&dns_ptr[i], &dns_ptr[0],
-						sizeof(struct in6_addr));
+			for (size_t i = 0; i < dns_count; ++i)
+				dns_ptr[i] = addr.addr;
 		}
 
 		relayd_forward_packet(router_discovery_event.socket,
