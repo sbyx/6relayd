@@ -292,7 +292,7 @@ static void set_stop(_unused int signal)
 static int open_interface(struct relayd_interface *iface,
 		const char *ifname, bool external)
 {
-	if (ifname[0] == 0 && iface == &config.master)
+	if (ifname[0] == '~' && iface == &config.master)
 		return 0; // Skipped
 
 	int status = 0;
@@ -436,22 +436,29 @@ ssize_t relayd_get_interface_addresses(int ifindex,
 
 	uint8_t buf[8192];
 	ssize_t len = 0, ret = 0;
-	struct nlmsghdr *nhm = NULL;
 
-	do {
-		if (!NLMSG_OK(nhm, len)) {
+	for (struct nlmsghdr *nhm = NULL; ; nhm = NLMSG_NEXT(nhm, len)) {
+		while (!NLMSG_OK(nhm, len)) {
 			len = recv(rtnl_socket, buf, sizeof(buf), 0);
 			nhm = (struct nlmsghdr*)buf;
-			if (len < 0 || !NLMSG_OK(nhm, len))
-				continue;
+			if (!NLMSG_OK(nhm, len)) {
+				if (errno == EINTR)
+					continue;
+				else
+					return ret;
+			}
 		}
+
+		if (nhm->nlmsg_type != RTM_NEWADDR)
+			break;
 
 		// Skip address but keep clearing socket buffer
 		if (ret >= (ssize_t)cnt)
 			continue;
 
 		struct ifaddrmsg *ifa = NLMSG_DATA(nhm);
-		if (ifa->ifa_scope != RT_SCOPE_UNIVERSE)
+		if (ifa->ifa_scope != RT_SCOPE_UNIVERSE ||
+				ifa->ifa_index != (unsigned)ifindex)
 			continue;
 
 		struct rtattr *rta = (struct rtattr*)&ifa[1];
@@ -471,9 +478,9 @@ ssize_t relayd_get_interface_addresses(int ifindex,
 
 			rta = RTA_NEXT(rta, alen);
 		}
+
 		++ret;
-	} while ((len < 0 && errno == EINTR) || ((nhm = NLMSG_NEXT(nhm, len))
-			&& nhm->nlmsg_type == RTM_NEWADDR));
+	}
 
 	return ret;
 }
