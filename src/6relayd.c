@@ -292,7 +292,7 @@ static void set_stop(_unused int signal)
 static int open_interface(struct relayd_interface *iface,
 		const char *ifname, bool external)
 {
-	if (ifname[0] == '~' && iface == &config.master)
+	if (ifname[0] == '.' && iface == &config.master)
 		return 0; // Skipped
 
 	int status = 0;
