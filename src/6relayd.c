@@ -438,10 +438,10 @@ ssize_t relayd_get_interface_addresses(int ifindex,
 	ssize_t len = 0, ret = 0;
 
 	for (struct nlmsghdr *nhm = NULL; ; nhm = NLMSG_NEXT(nhm, len)) {
-		while (!NLMSG_OK(nhm, len)) {
+		while (len < 0 || !NLMSG_OK(nhm, (size_t)len)) {
 			len = recv(rtnl_socket, buf, sizeof(buf), 0);
 			nhm = (struct nlmsghdr*)buf;
-			if (!NLMSG_OK(nhm, len)) {
+			if (len < 0 || !NLMSG_OK(nhm, (size_t)len)) {
 				if (errno == EINTR)
 					continue;
 				else
