@@ -216,16 +216,27 @@ static void handle_client_request(void *addr, void *data, size_t len,
 	} stat = {htons(DHCPV6_OPT_STATUS), htons(sizeof(stat) - 4),
 			htons(DHCPV6_STATUS_NOADDRSAVAIL)};
 
+	struct __attribute__((packed)) {
+		uint16_t type;
+		uint16_t len;
+		uint32_t value;
+	} refresh = {htons(DHCPV6_OPT_INFO_REFRESH), htons(sizeof(uint32_t)),
+			htonl(600)};
+
 	struct iovec iov[] = {{NULL, 0}, {&dest, (uint8_t*)&dest.clientid_type
-			- (uint8_t*)&dest}, {&stat, 0}, {NULL, 0}};
+			- (uint8_t*)&dest}, {NULL, 0}, {NULL, 0}};
 
 	uint8_t *opts = hdr->options, *opts_end = (uint8_t*)data + len;
 	if (hdr->msg_type == DHCPV6_MSG_RELAY_FORW)
 		handle_nested_message(data, len, &opts, &opts_end, iov);
-	if (opts[-4] == DHCPV6_MSG_SOLICIT)
+	if (opts[-4] == DHCPV6_MSG_SOLICIT) {
 		dest.msg_type = DHCPV6_MSG_ADVERTISE;
-	else if (opts[-4] == DHCPV6_MSG_REBIND)
+	} else if (opts[-4] == DHCPV6_MSG_REBIND) {
 		return; // Don't answer rebinds, as we don't do stateful
+	} else if (opts[-4] == DHCPV6_MSG_INFORMATION_REQUEST) {
+		iov[2].iov_base = &refresh;
+		iov[2].iov_len = sizeof(refresh);
+	}
 
 	// Go through options and find what we need
 	uint16_t otype, olen;
@@ -240,6 +251,7 @@ static void handle_client_request(void *addr, void *data, size_t len,
 					memcmp(odata, &dest.duid_type, olen))
 				return; // Not for us
 		} else if (otype == DHCPV6_OPT_IA_NA) {
+			iov[2].iov_base = &stat;
 			iov[2].iov_len = sizeof(stat);
 		}
 	}
