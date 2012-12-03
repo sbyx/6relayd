@@ -74,7 +74,6 @@ struct relayd_config {
 	bool force_address_assignment;
 	bool send_router_solicitation;
 	bool always_rewrite_dns;
-	bool compat_broken_dhcpv6;
 	bool always_announce_default_router;
 
 	struct relayd_interface master;

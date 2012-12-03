@@ -89,9 +89,7 @@ int main(int argc, char* const argv[])
 
 		case 'D':
 			config.enable_dhcpv6_relay = true;
-			if (!strcmp(optarg, "transparent"))
-				config.compat_broken_dhcpv6 = true;
-			else if (!strcmp(optarg, "server"))
+			if (!strcmp(optarg, "server"))
 				config.enable_dhcpv6_server = true;
 			else if (strcmp(optarg, "relay"))
 				return print_usage(argv[0]);
@@ -260,7 +258,6 @@ static int print_usage(const char *name)
 	"	   server	mini-server for Router Discovery on slaves\n"
 	"	-D <mode>	Enable DHCPv6-support\n"
 	"	   relay	standards-compliant relay\n"
-	"	   transparent	transparent relay for broken servers\n"
 	"	   server	mini-server for stateless DHCPv6 on slaves\n"
 	"	-N		Enable Neighbor Discovery Proxy (NDP)\n"
 	"	-F		Enable Forwarding for interfaces\n"

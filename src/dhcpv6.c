@@ -24,8 +24,6 @@
 
 static void relay_client_request(struct sockaddr_in6 *source,
 		const void *data, size_t len, struct relayd_interface *iface);
-static void relay_client_request_broken(struct sockaddr_in6 *source,
-		void *data, size_t len, struct relayd_interface *iface);
 static void relay_server_response(uint8_t *data, size_t len);
 
 static int create_socket(uint16_t port);
@@ -36,7 +34,6 @@ static void handle_client_request(void *addr, void *data, size_t len,
 		struct relayd_interface *iface);
 
 static struct relayd_event dhcpv6_event = {-1, NULL, handle_dhcpv6};
-static struct relayd_event broken_dhcpv6_event = {-1, NULL, handle_dhcpv6};
 
 static const struct relayd_config *config = NULL;
 
@@ -68,23 +65,6 @@ int init_dhcpv6_relay(const struct relayd_config *relayd_config)
 	if (config->enable_dhcpv6_server)
 		dhcpv6_event.handle_dgram = handle_client_request;
 	relayd_register_event(&dhcpv6_event);
-
-
-	// Use broken DHCPv6 server
-	if (config->compat_broken_dhcpv6 && config->enable_dhcpv6_relay) {
-		broken_dhcpv6_event.socket =
-				create_socket(DHCPV6_CLIENT_PORT);
-		if (broken_dhcpv6_event.socket < 0) {
-			syslog(LOG_ERR, "Failed to open DHCPv6 client socket: "
-					" %s", strerror(errno));
-			return -1;
-		}
-
-		setsockopt(broken_dhcpv6_event.socket, SOL_SOCKET,
-				SO_BINDTODEVICE, config->master.ifname,
-				sizeof(config->master.ifname));
-		relayd_register_event(&broken_dhcpv6_event);
-	}
 
 	return 0;
 }
@@ -276,14 +256,11 @@ static void handle_dhcpv6(void *addr, void *data, size_t len,
 	if (iface == &config->master)
 		relay_server_response(data, len);
 	else
-		if (!config->compat_broken_dhcpv6)
-			relay_client_request(addr, data, len, iface);
-		else
-			relay_client_request_broken(addr, data, len, iface);
+		relay_client_request(addr, data, len, iface);
 }
 
 
-// Relay server response (regular relay or broken server handling)
+// Relay server response (regular relay server handling)
 static void relay_server_response(uint8_t *data, size_t len)
 {
 	// Information we need to gather
@@ -299,58 +276,21 @@ static void relay_server_response(uint8_t *data, size_t len)
 	uint8_t *odata, *end = data + len;
 
 	// Relay DHCPv6 reply from server to client
-	if (!config->compat_broken_dhcpv6) {
-		struct dhcpv6_relay_header *h = (void*)data;
-		if (len < sizeof(*h) || h->msg_type != DHCPV6_MSG_RELAY_REPL)
-			return;
+	struct dhcpv6_relay_header *h = (void*)data;
+	if (len < sizeof(*h) || h->msg_type != DHCPV6_MSG_RELAY_REPL)
+		return;
 
-		memcpy(&target.sin6_addr, &h->peer_address,
-				sizeof(struct in6_addr));
+	memcpy(&target.sin6_addr, &h->peer_address,
+			sizeof(struct in6_addr));
 
-		// Go through options and find what we need
-		dhcpv6_for_each_option(h->options, end, otype, olen, odata) {
-			if (otype == DHCPV6_OPT_INTERFACE_ID
-					&& olen == sizeof(ifaceidx)) {
-				memcpy(&ifaceidx, odata, sizeof(ifaceidx));
-			} else if (otype == DHCPV6_OPT_RELAY_MSG) {
-				payload_data = odata;
-				payload_len = olen;
-			}
-		}
-	// Forward DHCPv6 reply from broken server to client
-	} else {
-		struct dhcpv6_client_header *h = (void*)data;
-
-		// Go through options and find what we need
-		dhcpv6_for_each_option(h->options, end, otype, olen, odata) {
-			if (otype == DHCPV6_OPT_AUTH)
-				return; // Cannot rewrite: stop.
-			else if (otype != DHCPV6_OPT_CLIENTID || olen <=
-					(int)sizeof(struct dhcpv6_broken_duid)
-					|| olen > 130)
-				continue;
-
-			// Get our rewritten DUID and extract information
-			struct dhcpv6_broken_duid du;
-			memcpy(&du, odata, sizeof(du));
-
-			if (du.duid_type == htons(DHCPV6_DUID_VENDOR) &&
-					du.vendor == htonl(DHCPV6_ENT_NO) &&
-					du.subtype == htons(DHCPV6_ENT_TYPE)) {
-				ifaceidx = du.iface_index;
-				target.sin6_addr = du.link_addr;
-
-				// Fixup length
-				odata[-1] = olen - sizeof(du);
-				len -= sizeof(du);
-
-				// Move package back together
-				memmove(odata, odata + sizeof(du),
-						len - (odata - data));
-
-				payload_data = data;
-				payload_len = len;
-			}
+	// Go through options and find what we need
+	dhcpv6_for_each_option(h->options, end, otype, olen, odata) {
+		if (otype == DHCPV6_OPT_INTERFACE_ID
+				&& olen == sizeof(ifaceidx)) {
+			memcpy(&ifaceidx, odata, sizeof(ifaceidx));
+		} else if (otype == DHCPV6_OPT_RELAY_MSG) {
+			payload_data = odata;
+			payload_len = olen;
 		}
 	}
 
@@ -457,63 +397,4 @@ static void relay_client_request(struct sockaddr_in6 *source,
 	struct iovec iov[2] = {{&hdr, sizeof(hdr)}, {(void*)data, len}};
 	relayd_forward_packet(dhcpv6_event.socket, &dhcpv6_servers,
 			iov, 2, &config->master);
-}
-
-
-// Forward client request to broken DHCPv6 server
-static void relay_client_request_broken(struct sockaddr_in6 *source,
-		void *data, size_t len, struct relayd_interface *iface)
-{
-	struct dhcpv6_client_header *h = data;
-	if (h->msg_type == DHCPV6_MSG_RELAY_REPL ||
-			h->msg_type == DHCPV6_MSG_RECONFIGURE ||
-			h->msg_type == DHCPV6_MSG_REPLY ||
-			h->msg_type == DHCPV6_MSG_ADVERTISE)
-		return; // Invalid message types for client
-
-	if (len + sizeof(struct dhcpv6_broken_duid) > RELAYD_BUFFER_SIZE)
-		return; // Message already too big
-
-	syslog(LOG_NOTICE, "Got a DHCPv6-request");
-
-	int otype, olen;
-	uint8_t *odata, *end = ((uint8_t*)data) + len;
-
-	// Go through options and find what we need
-	bool rewrite_done = false;
-	dhcpv6_for_each_option(h->options, end, otype, olen, odata) {
-		if (otype == DHCPV6_OPT_AUTH)
-			return; // Cannot rewrite: stop.
-		else if (otype != DHCPV6_OPT_CLIENTID)
-			continue;
-
-		// Rewrite DUID
-		struct dhcpv6_broken_duid du = {
-			htons(DHCPV6_DUID_VENDOR),
-			htonl(DHCPV6_ENT_NO),
-			htons(DHCPV6_ENT_TYPE),
-			iface->ifindex,
-			source->sin6_addr
-		};
-
-		// Assemble package back together
-		memmove(odata + sizeof(du), odata,
-				len - (odata - (uint8_t*)data));
-		memcpy(odata, &du, sizeof(du));
-
-		// Fixup length
-		odata[-1] = olen + sizeof(du);
-		len += sizeof(du);
-		rewrite_done = true;
-	}
-
-	if (!rewrite_done)
-		return;
-
-	struct sockaddr_in6 dhcpv6_servers = {AF_INET6,
-			htons(DHCPV6_SERVER_PORT), 0, ALL_DHCPV6_RELAYS,
-			config->master.ifindex};
-	struct iovec iov = {(void*)data, len};
-	relayd_forward_packet(broken_dhcpv6_event.socket, &dhcpv6_servers,
-			&iov, 1, &config->master);
 }
