@@ -295,14 +295,12 @@ static void send_router_advert(struct relayd_event *event)
 	for (size_t i = 0; i < cnt && lcnt < ARRAY_SIZE(iface->last_rs); ++i) {
 		struct nd_opt_prefix_info *p = &adv.prefix[i];
 		if (p->nd_opt_pi_preferred_time == 0 &&
-				ntohl(p->nd_opt_pi_valid_time) <= 7200)
+				p->nd_opt_pi_valid_time == 0)
 			continue;
 
 		iface->last_rs[lcnt] = *p;
 		iface->last_rs[lcnt].nd_opt_pi_preferred_time = 0;
-
-		if (ntohl(iface->last_rs[lcnt].nd_opt_pi_valid_time) > 7200)
-			iface->last_rs[lcnt].nd_opt_pi_valid_time = htonl(7200);
+		iface->last_rs[lcnt].nd_opt_pi_valid_time = 0;
 
 		++lcnt;
 	}
