@@ -135,6 +135,13 @@ int init_ndp_proxy(const struct relayd_config *relayd_config)
 	int val = 2;
 	setsockopt(ping_socket, IPPROTO_RAW, IPV6_CHECKSUM, &val, sizeof(val));
 
+	// This is required by RFC 4861
+	val = 255;
+	setsockopt(ping_socket, IPPROTO_IPV6, IPV6_MULTICAST_HOPS,
+			&val, sizeof(val));
+	setsockopt(ping_socket, IPPROTO_IPV6, IPV6_UNICAST_HOPS,
+			&val, sizeof(val));
+
 	// Filter all packages, we only want to send
 	struct icmp6_filter filt;
 	ICMP6_FILTER_SETBLOCKALL(&filt);
