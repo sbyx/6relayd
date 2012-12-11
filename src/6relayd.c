@@ -476,6 +476,9 @@ ssize_t relayd_get_interface_addresses(int ifindex,
 			rta = RTA_NEXT(rta, alen);
 		}
 
+		if (ifa->ifa_flags & IFA_F_DEPRECATED)
+			addrs[ret].preferred = 0;
+
 		++ret;
 	}
 
