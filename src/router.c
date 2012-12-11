@@ -275,10 +275,11 @@ static void send_router_advert(struct relayd_event *event)
 		p->nd_opt_pi_valid_time = htonl(3 * MaxRtrAdvInterval);
 		p->nd_opt_pi_preferred_time = htonl(2 * MaxRtrAdvInterval);
 
-		if (addr->valid != 0xffffffffU) {
+		if (addr->valid != 0xffffffffU)
 			p->nd_opt_pi_valid_time = htonl(addr->valid);
+
+		if (addr->preferred != 0xffffffffU)
 			p->nd_opt_pi_preferred_time = htonl(addr->preferred);
-		}
 	}
 
 	if (!default_router)
