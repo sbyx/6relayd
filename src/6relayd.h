@@ -56,8 +56,6 @@ struct relayd_interface {
 	uint32_t mtu;
 
 	struct relayd_event timer_rs;
-	struct nd_opt_prefix_info last_rs[RELAYD_MAX_PREFIXES];
-	size_t last_rs_count;
 };
 
 

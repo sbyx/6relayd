@@ -209,7 +209,7 @@ static void send_router_advert(struct relayd_event *event)
 		struct nd_opt_mtu mtu;
 		//struct icmpv6_opt rdnss;
 		//struct in6_addr rdnss_addr;
-		struct nd_opt_prefix_info prefix[RELAYD_MAX_PREFIXES * 2];
+		struct nd_opt_prefix_info prefix[RELAYD_MAX_PREFIXES];
 	} adv = {
 		.h = {{.icmp6_type = ND_ROUTER_ADVERT, .icmp6_code = 0}, 0, 0},
 		.lladdr = {ND_OPT_SOURCE_LINKADDR, 1, {0}},
@@ -236,9 +236,7 @@ static void send_router_advert(struct relayd_event *event)
 
 	// Construct Prefix Information options
 	bool default_router = false;
-	size_t cnt = iface->last_rs_count;
-	memcpy(adv.prefix, iface->last_rs,
-			iface->last_rs_count * sizeof(adv.prefix[0]));
+	size_t cnt = 0;
 
 	for (ssize_t i = 0; i < ipcnt; ++i) {
 		struct relayd_ipaddr *addr = &addrs[i];
@@ -289,23 +287,6 @@ static void send_router_advert(struct relayd_event *event)
 	struct sockaddr_in6 all_nodes = {AF_INET6, 0, 0, ALL_IPV6_NODES, 0};
 	relayd_forward_packet(router_discovery_event.socket,
 			&all_nodes, &iov, 1, iface);
-
-	// Remember last announced prefixes
-	size_t lcnt = 0;
-	memset(iface->last_rs, 0, sizeof(iface->last_rs));
-	for (size_t i = 0; i < cnt && lcnt < ARRAY_SIZE(iface->last_rs); ++i) {
-		struct nd_opt_prefix_info *p = &adv.prefix[i];
-		if (p->nd_opt_pi_preferred_time == 0 &&
-				p->nd_opt_pi_valid_time == 0)
-			continue;
-
-		iface->last_rs[lcnt] = *p;
-		iface->last_rs[lcnt].nd_opt_pi_preferred_time = 0;
-		iface->last_rs[lcnt].nd_opt_pi_valid_time = 0;
-
-		++lcnt;
-	}
-	iface->last_rs_count = lcnt;
 
 	// Rearm timer
 	struct itimerspec val = {{0,0}, {0,0}};
