@@ -39,7 +39,7 @@ static void handle_solicit(void *addr, void *data, size_t len,
 static void handle_rtnetlink(void *addr, void *data, size_t len,
 		struct relayd_interface *iface);
 static struct ndp_neighbor* find_neighbor(struct in6_addr *addr);
-static int modify_neighbor(struct in6_addr *addr, struct relayd_interface *iface,
+static void modify_neighbor(struct in6_addr *addr, struct relayd_interface *iface,
 		bool add);
 static ssize_t ping6(struct in6_addr *addr,
 		const struct relayd_interface *iface);
@@ -343,7 +343,7 @@ static struct ndp_neighbor* find_neighbor(struct in6_addr *addr)
 
 
 // Modified our own neighbor-entries
-static int modify_neighbor(struct in6_addr *addr,
+static void modify_neighbor(struct in6_addr *addr,
 		struct relayd_interface *iface, bool add)
 {
 	struct ndp_neighbor *n = find_neighbor(addr);
@@ -357,7 +357,7 @@ static int modify_neighbor(struct in6_addr *addr,
 	} else if (!n) { // No entry yet, add one if possible
 		if (neighbor_count >= NDP_MAX_NEIGHBORS ||
 				!(n = malloc(sizeof(*n))))
-			return 1;
+			return;
 
 		n->addr = *addr;
 		n->iface = iface;
@@ -369,14 +369,12 @@ static int modify_neighbor(struct in6_addr *addr,
 	} else if (n->iface == iface) {
 		if (!n->iface)
 			time(&n->timeout);
-		return 0; // Already up-to-date
 	} else if (iface && (!n->iface ||
 			(!iface->external && n->iface->external))) {
 		setup_route(addr, n->iface, false);
 		n->iface = iface;
 		setup_route(addr, n->iface, add);
 	}
-	return 1;
 	// TODO: In case a host switches interfaces we might want
 	// to set its old neighbor entry to NUD_STALE and ping it
 	// on the old interface to confirm if the MACs match.
@@ -434,8 +432,8 @@ static void handle_rtnetlink(_unused void *addr, void *data, size_t len,
 		if (is_addr)
 			add = (nh->nlmsg_type == RTM_NEWADDR);
 
-		if (modify_neighbor(addr, iface, add) && is_addr &&
-				config->enable_router_discovery_server)
+		modify_neighbor(addr, iface, add);
+		if (is_addr && config->enable_router_discovery_server)
 			raise(SIGUSR1); // Inform about a change in addresses
 
 		/* TODO: See if this is required for optimal operation

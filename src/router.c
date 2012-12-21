@@ -75,6 +75,11 @@ int init_router_discovery_relay(const struct relayd_config *relayd_config)
 			send_router_advert(&iface->timer_rs);
 		}
 
+		// Disable looping for RA-events
+		int zero = 0;
+		setsockopt(router_discovery_event.socket, IPPROTO_IPV6,
+				IPV6_MULTICAST_LOOP, &zero, sizeof(zero));
+
 		// Get informed when addresses change
 		signal(SIGUSR1, sigusr1_refresh);
 	} else if (config->enable_router_discovery_relay) {
