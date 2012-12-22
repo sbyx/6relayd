@@ -18,5 +18,6 @@ struct icmpv6_opt {
 
 #define MaxRtrAdvInterval 600
 #define MinRtrAdvInterval (MaxRtrAdvInterval / 3)
+#define MaxValidTime  86400
 
 #define ND_RA_FLAG_PROXY    0x4

@@ -275,13 +275,13 @@ static void send_router_advert(struct relayd_event *event)
 		p->nd_opt_pi_prefix_len = 64;
 		p->nd_opt_pi_flags_reserved =
 				ND_OPT_PI_FLAG_ONLINK | ND_OPT_PI_FLAG_AUTO;
-		p->nd_opt_pi_valid_time = htonl(3 * MaxRtrAdvInterval);
-		p->nd_opt_pi_preferred_time = htonl(2 * MaxRtrAdvInterval);
+		p->nd_opt_pi_valid_time = htonl(MaxValidTime);
+		p->nd_opt_pi_preferred_time = htonl(MaxValidTime);
 
-		if (addr->valid != 0xffffffffU)
+		if (addr->valid < MaxValidTime)
 			p->nd_opt_pi_valid_time = htonl(addr->valid);
 
-		if (addr->preferred != 0xffffffffU)
+		if (addr->preferred < MaxValidTime)
 			p->nd_opt_pi_preferred_time = htonl(addr->preferred);
 	}
 
