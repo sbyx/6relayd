@@ -53,7 +53,6 @@ struct relayd_interface {
 	char ifname[IF_NAMESIZE];
 	uint8_t mac[6];
 	bool external;
-	uint32_t mtu;
 
 	struct relayd_event timer_rs;
 };
@@ -97,6 +96,7 @@ ssize_t relayd_forward_packet(int socket, struct sockaddr_in6 *dest,
 		const struct relayd_interface *iface);
 ssize_t relayd_get_interface_addresses(int ifindex,
 		struct relayd_ipaddr *addrs, size_t cnt);
+int relayd_get_interface_mtu(const char *ifname);
 struct relayd_interface* relayd_get_interface_by_index(int ifindex);
 int relayd_sysctl_interface(const char *ifname, const char *option,
 		const char *data);

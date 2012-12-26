@@ -208,6 +208,10 @@ static void send_router_advert(struct relayd_event *event)
 	struct relayd_interface *iface =
 			container_of(event, struct relayd_interface, timer_rs);
 
+	int mtu = relayd_get_interface_mtu(iface->ifname);
+	if (mtu < 0)
+		mtu = 1500;
+
 	struct {
 		struct nd_router_advert h;
 		struct icmpv6_opt lladdr;
@@ -218,7 +222,7 @@ static void send_router_advert(struct relayd_event *event)
 	} adv = {
 		.h = {{.icmp6_type = ND_ROUTER_ADVERT, .icmp6_code = 0}, 0, 0},
 		.lladdr = {ND_OPT_SOURCE_LINKADDR, 1, {0}},
-		.mtu = {ND_OPT_MTU, 1, 0, htonl(iface->mtu)},
+		.mtu = {ND_OPT_MTU, 1, 0, htonl(mtu)},
 		//.rdnss = {ND_OPT_RECURSIVE_DNS, 3, {0, 0, 255, 255, 255, 255}},
 	};
 	adv.h.nd_ra_flags_reserved = ND_RA_FLAG_OTHER;

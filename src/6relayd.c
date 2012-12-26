@@ -308,9 +308,6 @@ static int open_interface(struct relayd_interface *iface,
 
 	iface->ifindex = ifr.ifr_ifindex;
 
-	ioctl(sock, SIOCGIFMTU, &ifr);
-	iface->mtu = ifr.ifr_mtu;
-
 	// Detect MAC-address of interface
 	if (ioctl(sock, SIOCGIFHWADDR, &ifr) < 0)
 		goto err;
@@ -360,6 +357,27 @@ int relayd_sysctl_interface(const char *ifname, const char *option,
 	close(fd);
 
 	return (written > 0) ? 0 : -1;
+}
+
+
+// Read IPv6 MTU for interface
+int relayd_get_interface_mtu(const char *ifname)
+{
+	char buf[64];
+	const char *sysctl_pattern = "/proc/sys/net/ipv6/conf/%s/mtu";
+	snprintf(buf, sizeof(buf), sysctl_pattern, ifname);
+
+	int fd = open(buf, O_RDONLY);
+	ssize_t len = read(fd, buf, sizeof(buf) - 1);
+	close(fd);
+
+	if (len < 0)
+		return -1;
+
+
+	buf[len] = 0;
+	return atoi(buf);
+
 }
 
 
