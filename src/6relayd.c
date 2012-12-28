@@ -249,7 +249,7 @@ static int print_usage(const char *name)
 {
 	fprintf(stderr,
 	"Usage: %s [options] <master> [[~]<slave1> [[~]<slave2> [...]]]\n"
-	"\nNote: to use server features only (no relaying) set master to '~'.\n"
+	"\nNote: to use server features only (no relaying) set master to '.'\n"
 	"\nFeatures:\n"
 	"	-A		Automatic relay (defaults: RrelayDrelayNFslr)\n"
 	"	-S		Automatic server (defaults: RserverDserver)\n"
