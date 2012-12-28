@@ -63,10 +63,8 @@ int init_dhcpv6_relay(const struct relayd_config *relayd_config)
 				IPV6_ADD_MEMBERSHIP, &mreq, sizeof(mreq));
 	}
 
-	if (config->enable_dhcpv6_server) {
+	if (config->enable_dhcpv6_server)
 		dhcpv6_event.handle_dgram = handle_client_request;
-		res_init();
-	}
 	relayd_register_event(&dhcpv6_event);
 
 	return 0;
@@ -213,6 +211,7 @@ static void handle_client_request(void *addr, void *data, size_t len,
 	} domain = {htons(DHCPV6_OPT_DNS_DOMAIN), 0, {0}};
 	size_t domain_len = 0;
 
+	res_init();
 	const char *search = _res.dnsrch[0];
 	if (search && search[0]) {
 		int len = dn_comp(search, domain.name,
