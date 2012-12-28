@@ -16,6 +16,7 @@
 #include <errno.h>
 #include <unistd.h>
 #include <stddef.h>
+#include <resolv.h>
 #include <sys/timerfd.h>
 
 #include "6relayd.h"
@@ -62,8 +63,10 @@ int init_dhcpv6_relay(const struct relayd_config *relayd_config)
 				IPV6_ADD_MEMBERSHIP, &mreq, sizeof(mreq));
 	}
 
-	if (config->enable_dhcpv6_server)
+	if (config->enable_dhcpv6_server) {
 		dhcpv6_event.handle_dgram = handle_client_request;
+		res_init();
+	}
 	relayd_register_event(&dhcpv6_event);
 
 	return 0;
@@ -98,7 +101,7 @@ static int create_socket(uint16_t port)
 
 
 static void handle_nested_message(uint8_t *data, size_t len,
-		uint8_t **opts, uint8_t **end, struct iovec iov[2])
+		uint8_t **opts, uint8_t **end, struct iovec iov[5])
 {
 	struct dhcpv6_relay_header *hdr = (struct dhcpv6_relay_header*)data;
 	if (iov[0].iov_base == NULL)
@@ -119,8 +122,8 @@ static void handle_nested_message(uint8_t *data, size_t len,
 	uint8_t *odata;
 	dhcpv6_for_each_option(hdr->options, data + len, otype, olen, odata) {
 		if (otype == DHCPV6_OPT_RELAY_MSG) {
-			iov[3].iov_base = odata + olen;
-			iov[3].iov_len = (data + len) - (odata + olen);
+			iov[4].iov_base = odata + olen;
+			iov[4].iov_len = (data + len) - (odata + olen);
 			handle_nested_message(odata, olen, opts, end, iov);
 			return;
 		}
@@ -203,8 +206,27 @@ static void handle_client_request(void *addr, void *data, size_t len,
 	} refresh = {htons(DHCPV6_OPT_INFO_REFRESH), htons(sizeof(uint32_t)),
 			htonl(600)};
 
+	struct __attribute__((packed)) {
+		uint16_t type;
+		uint16_t len;
+		uint8_t name[255];
+	} domain = {htons(DHCPV6_OPT_DNS_DOMAIN), 0, {0}};
+	size_t domain_len = 0;
+
+	const char *search = _res.dnsrch[0];
+	if (search && search[0]) {
+		int len = dn_comp(search, domain.name,
+				sizeof(domain.name), NULL, NULL);
+		if (len > 0) {
+			domain.len = htons(len);
+			domain_len = len + 4;
+		}
+
+	}
+
 	struct iovec iov[] = {{NULL, 0}, {&dest, (uint8_t*)&dest.clientid_type
-			- (uint8_t*)&dest}, {NULL, 0}, {NULL, 0}};
+			- (uint8_t*)&dest}, {NULL, 0}, {&domain, domain_len},
+			{NULL, 0}};
 
 	uint8_t *opts = hdr->options, *opts_end = (uint8_t*)data + len;
 	if (hdr->msg_type == DHCPV6_MSG_RELAY_FORW)
@@ -245,7 +267,7 @@ static void handle_client_request(void *addr, void *data, size_t len,
 		return; // Failed to detect a local address
 
 	dest.addr = ipaddr.addr;
-	relayd_forward_packet(dhcpv6_event.socket, addr, iov, 4, iface);
+	relayd_forward_packet(dhcpv6_event.socket, addr, iov, 5, iface);
 }
 
 

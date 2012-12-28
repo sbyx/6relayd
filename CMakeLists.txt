@@ -9,6 +9,7 @@ set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Os -g -std=c99")
 add_definitions(-D_GNU_SOURCE -Wall -Werror -Wextra -Wno-extended-offsetof -pedantic)
 
 add_executable(6relayd src/6relayd.c src/router.c src/dhcpv6.c src/ndp.c)
+target_link_libraries(6relayd resolv)
 
 # Installation
 install(TARGETS 6relayd DESTINATION sbin/)
