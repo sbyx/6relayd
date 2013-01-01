@@ -79,6 +79,9 @@ int init_ndp_proxy(const struct relayd_config *relayd_config)
 	uint32_t group = RTNLGRP_IPV6_IFADDR;
 	setsockopt(rtnl_event.socket, SOL_NETLINK,
 			NETLINK_ADD_MEMBERSHIP, &group, sizeof(group));
+	group = RTNLGRP_IPV6_ROUTE;
+	setsockopt(rtnl_event.socket, SOL_NETLINK,
+			NETLINK_ADD_MEMBERSHIP, &group, sizeof(group));
 
 	// Synthesize initial address events
 	struct {
@@ -388,6 +391,13 @@ static void handle_rtnetlink(_unused void *addr, void *data, size_t len,
 {
 	for (struct nlmsghdr *nh = (struct nlmsghdr*)data; NLMSG_OK(nh, len);
 			nh = NLMSG_NEXT(nh, len)) {
+		struct rtmsg *rtm = NLMSG_DATA(nh);
+		if (config->enable_router_discovery_server &&
+				(nh->nlmsg_type == RTM_NEWROUTE ||
+				nh->nlmsg_type == RTM_DELROUTE) &&
+				rtm->rtm_dst_len == 0)
+			raise(SIGUSR1); // Inform about a change in default route
+
 		struct ndmsg *ndm = NLMSG_DATA(nh);
 		struct ifaddrmsg *ifa = NLMSG_DATA(nh);
 		if (nh->nlmsg_type != RTM_NEWNEIGH
