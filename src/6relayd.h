@@ -24,6 +24,7 @@
 
 // RFC 6106 defines this router advertisement option
 #define ND_OPT_RECURSIVE_DNS 25
+#define ND_OPT_DNS_SEARCH 31
 
 #define RELAYD_BUFFER_SIZE 1536
 #define RELAYD_MAX_PREFIXES 8

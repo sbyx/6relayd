@@ -17,6 +17,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <signal.h>
+#include <resolv.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
@@ -216,18 +217,14 @@ static void send_router_advert(struct relayd_event *event)
 		struct nd_router_advert h;
 		struct icmpv6_opt lladdr;
 		struct nd_opt_mtu mtu;
-		//struct icmpv6_opt rdnss;
-		//struct in6_addr rdnss_addr;
 		struct nd_opt_prefix_info prefix[RELAYD_MAX_PREFIXES];
 	} adv = {
 		.h = {{.icmp6_type = ND_ROUTER_ADVERT, .icmp6_code = 0}, 0, 0},
 		.lladdr = {ND_OPT_SOURCE_LINKADDR, 1, {0}},
 		.mtu = {ND_OPT_MTU, 1, 0, htonl(mtu)},
-		//.rdnss = {ND_OPT_RECURSIVE_DNS, 3, {0, 0, 255, 255, 255, 255}},
 	};
 	adv.h.nd_ra_flags_reserved = ND_RA_FLAG_OTHER;
 	memcpy(adv.lladdr.data, iface->mac, sizeof(adv.lladdr.data));
-
 
 	// If not currently shutting down
 	struct relayd_ipaddr addrs[RELAYD_MAX_PREFIXES];
@@ -247,13 +244,19 @@ static void send_router_advert(struct relayd_event *event)
 	bool default_router = false;
 	size_t cnt = 0;
 
+	struct in6_addr *pref_addr = NULL;
+	uint32_t pref_time = 0;
+
 	for (ssize_t i = 0; i < ipcnt; ++i) {
 		struct relayd_ipaddr *addr = &addrs[i];
 		if (addr->prefix > 64)
 			continue; // Address not suitable
 
-		//if (cnt == 0)
-		//	adv.rdnss_addr = addr->sin6_addr;
+		if (addr->preferred > MaxValidTime)
+			addr->preferred = MaxValidTime;
+
+		if (addr->valid > MaxValidTime)
+			addr->valid = MaxValidTime;
 
 		struct nd_opt_prefix_info *p = NULL;
 		for (size_t i = 0; i < cnt; ++i) {
@@ -273,29 +276,73 @@ static void send_router_advert(struct relayd_event *event)
 				(addr->addr.s6_addr[0] & 0xfe) != 0xfc)
 			default_router = true;
 
+
+
 		memcpy(&p->nd_opt_pi_prefix, &addr->addr, 8);
 		p->nd_opt_pi_type = ND_OPT_PREFIX_INFORMATION;
 		p->nd_opt_pi_len = 4;
 		p->nd_opt_pi_prefix_len = 64;
 		p->nd_opt_pi_flags_reserved =
 				ND_OPT_PI_FLAG_ONLINK | ND_OPT_PI_FLAG_AUTO;
-		p->nd_opt_pi_valid_time = htonl(MaxValidTime);
-		p->nd_opt_pi_preferred_time = htonl(MaxValidTime);
+		p->nd_opt_pi_valid_time = htonl(addr->valid);
+		p->nd_opt_pi_preferred_time = htonl(addr->preferred);
 
-		if (addr->valid < MaxValidTime)
-			p->nd_opt_pi_valid_time = htonl(addr->valid);
-
-		if (addr->preferred < MaxValidTime)
-			p->nd_opt_pi_preferred_time = htonl(addr->preferred);
+		if (addr->preferred > pref_time) {
+			pref_time = addr->preferred;
+			pref_addr = &addr->addr;
+		}
 	}
 
 	if (!default_router)
 		adv.h.nd_ra_router_lifetime = 0;
 
-	struct iovec iov = {&adv, (uint8_t*)&adv.prefix[cnt] - (uint8_t*)&adv};
+
+	struct {
+		uint8_t type;
+		uint8_t len;
+		uint8_t pad;
+		uint8_t pad2;
+		uint32_t lifetime;
+		struct in6_addr addr;
+	} dns = {ND_OPT_RECURSIVE_DNS, 3, 0, 0,
+			htonl(pref_time), IN6ADDR_ANY_INIT};
+	size_t dnslen = 0;
+
+	if (pref_addr) {
+		dns.addr = *pref_addr;
+		dnslen = sizeof(dns);
+	}
+
+
+	struct {
+		uint8_t type;
+		uint8_t len;
+		uint8_t pad;
+		uint8_t pad2;
+		uint32_t lifetime;
+		uint8_t name[256];
+	} domain = {ND_OPT_DNS_SEARCH, 3, 0, 0,
+			htonl(3 * MaxRtrAdvInterval), {0}};
+	size_t domain_len = 0;
+
+	res_init();
+	const char *search = _res.dnsrch[0];
+	if (search && search[0]) {
+		int len = dn_comp(search, domain.name,
+				sizeof(domain.name), NULL, NULL);
+		if (len > 0) {
+			domain_len = ((len + 7) & (~7)) + 8;
+			domain.len = domain_len / 8;
+		}
+
+	}
+
+
+	struct iovec iov[] = {{&adv, (uint8_t*)&adv.prefix[cnt] - (uint8_t*)&adv},
+			{&dns, dnslen}, {&domain, domain_len}};
 	struct sockaddr_in6 all_nodes = {AF_INET6, 0, 0, ALL_IPV6_NODES, 0};
 	relayd_forward_packet(router_discovery_event.socket,
-			&all_nodes, &iov, 1, iface);
+			&all_nodes, iov, 3, iface);
 
 	// Rearm timer
 	struct itimerspec val = {{0,0}, {0,0}};
