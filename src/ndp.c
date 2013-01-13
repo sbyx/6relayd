@@ -70,6 +70,8 @@ static const struct sock_fprog bpf_prog = {sizeof(bpf) / sizeof(*bpf), bpf};
 int init_ndp_proxy(const struct relayd_config *relayd_config)
 {
 	config = relayd_config;
+	if (config->slavecount < 1)
+		return 0;
 
 	// Setup netlink socket
 	if ((rtnl_event.socket = relayd_open_rtnl_socket()) < 0)
