@@ -230,8 +230,7 @@ static void send_router_advert(struct relayd_event *event)
 		.lladdr = {ND_OPT_SOURCE_LINKADDR, 1, {0}},
 		.mtu = {ND_OPT_MTU, 1, 0, htonl(mtu)},
 	};
-	adv.h.nd_ra_flags_reserved =
-			ND_OPT_PI_FLAG_ONLINK | ND_OPT_PI_FLAG_AUTO;
+	adv.h.nd_ra_flags_reserved = ND_RA_FLAG_OTHER;
 	memcpy(adv.lladdr.data, iface->mac, sizeof(adv.lladdr.data));
 
 	// If not currently shutting down
@@ -290,7 +289,7 @@ static void send_router_advert(struct relayd_event *event)
 		p->nd_opt_pi_type = ND_OPT_PREFIX_INFORMATION;
 		p->nd_opt_pi_len = 4;
 		p->nd_opt_pi_prefix_len = 64;
-		p->nd_opt_pi_flags_reserved =
+		p->nd_opt_pi_flags_reserved = ND_OPT_PI_FLAG_ONLINK |
 				ND_OPT_PI_FLAG_AUTO;
 		p->nd_opt_pi_valid_time = htonl(addr->valid);
 		p->nd_opt_pi_preferred_time = htonl(addr->preferred);
