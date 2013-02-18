@@ -82,7 +82,8 @@ int init_router_discovery_relay(const struct relayd_config *relayd_config)
 				IPV6_MULTICAST_LOOP, &zero, sizeof(zero));
 
 		// Get informed when addresses change
-		signal(SIGUSR1, sigusr1_refresh);
+		struct sigaction sa = {.sa_handler = sigusr1_refresh};
+		sigaction(SIGUSR1, &sa, NULL);
 	} else if (config->enable_router_discovery_relay) {
 		struct ipv6_mreq an = {ALL_IPV6_NODES, config->master.ifindex};
 		setsockopt(router_discovery_event.socket, IPPROTO_IPV6,

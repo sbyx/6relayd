@@ -181,7 +181,8 @@ int main(int argc, char* const argv[])
 	}
 
 	srandom(clock() ^ getpid());
-	signal(SIGUSR1, SIG_IGN);
+	struct sigaction sa = {.sa_handler = SIG_IGN};
+	sigaction(SIGUSR1, &sa, NULL);
 
 	if (init_router_discovery_relay(&config))
 		return 4;
