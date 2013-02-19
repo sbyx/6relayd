@@ -179,7 +179,7 @@ void deinit_ndp_proxy()
 {
 	while (!list_empty(&neighbors)) {
 		struct ndp_neighbor *c = list_first_entry(&neighbors,
-				__typeof(*c), head);
+				struct ndp_neighbor, head);
 		modify_neighbor(&c->addr, c->iface, false);
 	}
 }
@@ -351,6 +351,9 @@ static struct ndp_neighbor* find_neighbor(struct in6_addr *addr)
 static void modify_neighbor(struct in6_addr *addr,
 		struct relayd_interface *iface, bool add)
 {
+	if (!addr || (void*)addr == (void*)iface)
+		return;
+
 	struct ndp_neighbor *n = find_neighbor(addr);
 	if (!add) { // Delete action
 		if (n && (!n->iface || n->iface == iface)) {
@@ -391,7 +394,7 @@ static void modify_neighbor(struct in6_addr *addr,
 static void handle_rtnetlink(_unused void *addr, void *data, size_t len,
 		_unused struct relayd_interface *iface)
 {
-	for (struct nlmsghdr *nh = (struct nlmsghdr*)data; NLMSG_OK(nh, len);
+	for (struct nlmsghdr *nh = data; NLMSG_OK(nh, len);
 			nh = NLMSG_NEXT(nh, len)) {
 		struct rtmsg *rtm = NLMSG_DATA(nh);
 		if (config->enable_router_discovery_server &&
@@ -422,13 +425,14 @@ static void handle_rtnetlink(_unused void *addr, void *data, size_t len,
 
 		// Data to retrieve
 		size_t rta_offset = (is_addr) ? sizeof(*ifa) : sizeof(*ndm);
-		size_t alen = NLMSG_PAYLOAD(nh, rta_offset);
+		uint16_t atype = (is_addr) ? IFA_ADDRESS : NDA_DST;
+		ssize_t alen = NLMSG_PAYLOAD(nh, rta_offset);
 		struct in6_addr *addr = NULL;
 
-		for (struct rtattr *rta = (void*)((uint8_t*)ndm + rta_offset);
+		for (struct rtattr *rta = (void*)(((uint8_t*)ndm) + rta_offset);
 				RTA_OK(rta, alen); rta = RTA_NEXT(rta, alen))
-			if (rta->rta_type == (is_addr ? IFA_ADDRESS : NDA_DST)
-					&& RTA_PAYLOAD(rta) >= sizeof(*addr))
+			if (rta->rta_type == atype &&
+					RTA_PAYLOAD(rta) >= sizeof(*addr))
 				addr = RTA_DATA(rta);
 
 		// Address not specified or unrelated
@@ -437,12 +441,13 @@ static void handle_rtnetlink(_unused void *addr, void *data, size_t len,
 			continue;
 
 		// Check for states
-		bool add = (nh->nlmsg_type == RTM_NEWNEIGH && (ndm->ndm_state &
-			(NUD_REACHABLE | NUD_STALE | NUD_DELAY | NUD_PROBE
-					| NUD_PERMANENT | NUD_NOARP)));
-
+		bool add;
 		if (is_addr)
 			add = (nh->nlmsg_type == RTM_NEWADDR);
+		else
+			add = (nh->nlmsg_type == RTM_NEWNEIGH && (ndm->ndm_state &
+				(NUD_REACHABLE | NUD_STALE | NUD_DELAY | NUD_PROBE
+						| NUD_PERMANENT | NUD_NOARP)));
 
 		modify_neighbor(addr, iface, add);
 		if (is_addr && config->enable_router_discovery_server)
