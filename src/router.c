@@ -252,7 +252,7 @@ static void send_router_advert(struct relayd_event *event)
 	bool have_public = false;
 	size_t cnt = 0;
 
-	struct in6_addr *pref_addr = NULL;
+	const struct in6_addr *pref_addr = NULL;
 	uint32_t pref_time = 0;
 
 	for (ssize_t i = 0; i < ipcnt; ++i) {
@@ -316,6 +316,9 @@ static void send_router_advert(struct relayd_event *event)
 	} dns = {ND_OPT_RECURSIVE_DNS, 3, 0, 0,
 			htonl(pref_time), IN6ADDR_ANY_INIT};
 	size_t dnslen = 0;
+
+	if (config->always_rewrite_dns && !IN6_IS_ADDR_UNSPECIFIED(&config->dnsaddr))
+		pref_addr = &config->dnsaddr;
 
 	if (pref_addr) {
 		dns.addr = *pref_addr;
@@ -421,15 +424,22 @@ static void forward_router_advertisement(uint8_t *data, size_t len)
 
 		// If we have to rewrite DNS entries
 		if (config->always_rewrite_dns && dns_ptr && dns_count > 0) {
+			const struct in6_addr *rewrite;
 			struct relayd_ipaddr addr;
-			if (relayd_get_interface_addresses(
+
+			if (!IN6_IS_ADDR_UNSPECIFIED(&config->dnsaddr)) {
+				rewrite = &config->dnsaddr;
+			} else {
+				if (relayd_get_interface_addresses(
 					config->slaves[i].ifindex,
 					&addr, 1) < 1)
 				continue; // Unable to comply
+				rewrite = &addr.addr;
+			}
 
 			// Copy over any other addresses
 			for (size_t i = 0; i < dns_count; ++i)
-				dns_ptr[i] = addr.addr;
+				dns_ptr[i] = *rewrite;
 		}
 
 		relayd_forward_packet(router_discovery_event.socket,

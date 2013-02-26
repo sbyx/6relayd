@@ -351,12 +351,19 @@ static void relay_server_response(uint8_t *data, size_t len)
 			return; // Impossible to rewrite
 
 		struct relayd_ipaddr ip;
-		if (relayd_get_interface_addresses(iface->ifindex, &ip, 1) < 1)
-			return; // Unable to get interface address
+		const struct in6_addr *rewrite;
+
+		if (!IN6_IS_ADDR_UNSPECIFIED(&config->dnsaddr)) {
+			rewrite = &config->dnsaddr;
+		} else {
+			if (relayd_get_interface_addresses(iface->ifindex, &ip, 1) < 1)
+				return; // Unable to get interface address
+			rewrite = &ip.addr;
+		}
 
 		// Copy over any other addresses
 		for (size_t i = 0; i < dns_count; ++i)
-			memcpy(&dns_ptr[i], &ip.addr, sizeof(ip.addr));
+			memcpy(&dns_ptr[i], rewrite, sizeof(*rewrite));
 	}
 
 	struct iovec iov = {payload_data, payload_len};

@@ -75,6 +75,7 @@ struct relayd_config {
 	bool always_announce_default_router;
 	bool deprecate_ula_if_public_avail;
 
+	struct in6_addr dnsaddr;
 	struct relayd_interface master;
 	struct relayd_interface *slaves;
 	size_t slavecount;

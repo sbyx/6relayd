@@ -60,7 +60,7 @@ int main(int argc, char* const argv[])
 	bool daemonize = false;
 	int verbosity = 0;
 	int c;
-	while ((c = getopt(argc, argv, "ASR:D:NFslucnrp:dvh")) != -1) {
+	while ((c = getopt(argc, argv, "ASR:D:NFslucn::rp:dvh")) != -1) {
 		switch (c) {
 		case 'A':
 			config.enable_router_discovery_relay = true;
@@ -121,6 +121,8 @@ int main(int argc, char* const argv[])
 
 		case 'n':
 			config.always_rewrite_dns = true;
+			if (optarg)
+				inet_pton(AF_INET6, optarg, &config.dnsaddr);
 			break;
 
 		case 'r':
