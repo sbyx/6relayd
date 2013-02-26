@@ -280,7 +280,7 @@ static void send_router_advert(struct relayd_event *event)
 			p = &adv.prefix[cnt++];
 		}
 
-		if ((addr->addr.s6_addr[0] & 0xfe) != 0xfc)
+		if ((addr->addr.s6_addr[0] & 0xfe) != 0xfc && addr->preferred > 0)
 			have_public = true;
 
 		memcpy(&p->nd_opt_pi_prefix, &addr->addr, 8);
