@@ -73,6 +73,7 @@ struct relayd_config {
 	bool send_router_solicitation;
 	bool always_rewrite_dns;
 	bool always_announce_default_router;
+	bool deprecate_ula_if_public_avail;
 
 	struct relayd_interface master;
 	struct relayd_interface *slaves;

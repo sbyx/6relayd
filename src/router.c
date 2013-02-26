@@ -249,7 +249,7 @@ static void send_router_advert(struct relayd_event *event)
 
 
 	// Construct Prefix Information options
-	bool default_router = false;
+	bool have_public = false;
 	size_t cnt = 0;
 
 	struct in6_addr *pref_addr = NULL;
@@ -280,11 +280,8 @@ static void send_router_advert(struct relayd_event *event)
 			p = &adv.prefix[cnt++];
 		}
 
-		if (config->always_announce_default_router ||
-				(addr->addr.s6_addr[0] & 0xfe) != 0xfc)
-			default_router = true;
-
-
+		if ((addr->addr.s6_addr[0] & 0xfe) != 0xfc)
+			have_public = true;
 
 		memcpy(&p->nd_opt_pi_prefix, &addr->addr, 8);
 		p->nd_opt_pi_type = ND_OPT_PREFIX_INFORMATION;
@@ -301,9 +298,13 @@ static void send_router_advert(struct relayd_event *event)
 		}
 	}
 
-	if (!default_router)
+	if (!have_public && !config->always_announce_default_router)
 		adv.h.nd_ra_router_lifetime = 0;
 
+	if (have_public && config->deprecate_ula_if_public_avail)
+		for (size_t i = 0; i < cnt; ++i)
+			if ((adv.prefix[i].nd_opt_pi_prefix.s6_addr[0] & 0xfe) == 0xfc)
+				adv.prefix[i].nd_opt_pi_preferred_time = 0;
 
 	struct {
 		uint8_t type;

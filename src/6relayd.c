@@ -60,7 +60,7 @@ int main(int argc, char* const argv[])
 	bool daemonize = false;
 	int verbosity = 0;
 	int c;
-	while ((c = getopt(argc, argv, "ASR:D:NFslunrp:dvh")) != -1) {
+	while ((c = getopt(argc, argv, "ASR:D:NFslucnrp:dvh")) != -1) {
 		switch (c) {
 		case 'A':
 			config.enable_router_discovery_relay = true;
@@ -113,6 +113,10 @@ int main(int argc, char* const argv[])
 
 		case 'u':
 			config.always_announce_default_router = true;
+			break;
+
+		case 'c':
+			config.deprecate_ula_if_public_avail = true;
 			break;
 
 		case 'n':
@@ -266,6 +270,7 @@ static int print_usage(const char *name)
 	"	-s		Send initial RD-Solicitation to <master>\n"
 	"	-l		RD: Force local address assignment\n"
 	"	-u		RD: Assume default router even with ULA only\n"
+	"	-c		RD: ULA-compatibility with broken devices\n"
 	"	-n		RD/DHCPv6: always rewrite name server\n"
 	"	-r		NDP: learn routes to neighbors\n"
 	"	slave prefix ~	NDP: don't proxy NDP for hosts and only\n"
