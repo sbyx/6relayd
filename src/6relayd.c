@@ -541,8 +541,13 @@ static void relayd_receive_packets(struct relayd_event *event)
 				cmsg_buf, sizeof(cmsg_buf), 0};
 
 		ssize_t len = recvmsg(event->socket, &msg, MSG_DONTWAIT);
-		if (len < 0 && errno == EAGAIN)
-			break;
+		if (len < 0) {
+			if (errno == EAGAIN)
+				break;
+			else
+				continue;
+		}
+
 
 		// Extract destination interface
 		int destiface = 0;
