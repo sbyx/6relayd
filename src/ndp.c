@@ -336,13 +336,25 @@ static void setup_route(struct in6_addr *addr, struct relayd_interface *iface,
 	send(rtnl_event.socket, &req, sizeof(req), MSG_DONTWAIT);
 }
 
+static void free_neighbor(struct ndp_neighbor *n)
+{
+	setup_route(&n->addr, n->iface, false);
+	list_del(&n->head);
+	free(n);
+	--neighbor_count;
+}
 
 static struct ndp_neighbor* find_neighbor(struct in6_addr *addr)
 {
-	struct ndp_neighbor *n;
-	list_for_each_entry(n, &neighbors, head)
+	time_t now = time(NULL);
+	struct ndp_neighbor *n, *e;
+	list_for_each_entry_safe(n, e, &neighbors, head) {
 		if (IN6_ARE_ADDR_EQUAL(&n->addr, addr))
 			return n;
+
+		if (!n->iface && abs(n->timeout - now) >= 5)
+			free_neighbor(n);
+	}
 	return NULL;
 }
 
@@ -356,12 +368,8 @@ static void modify_neighbor(struct in6_addr *addr,
 
 	struct ndp_neighbor *n = find_neighbor(addr);
 	if (!add) { // Delete action
-		if (n && (!n->iface || n->iface == iface)) {
-			setup_route(addr, n->iface, add);
-			list_del(&n->head);
-			free(n);
-			--neighbor_count;
-		}
+		if (n && (!n->iface || n->iface == iface))
+			free_neighbor(n);
 	} else if (!n) { // No entry yet, add one if possible
 		if (neighbor_count >= NDP_MAX_NEIGHBORS ||
 				!(n = malloc(sizeof(*n))))
