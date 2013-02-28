@@ -260,8 +260,8 @@ static void send_router_advert(struct relayd_event *event)
 		if (addr->prefix > 64)
 			continue; // Address not suitable
 
-		if (addr->preferred > MaxValidTime)
-			addr->preferred = MaxValidTime;
+		if (addr->preferred > MaxPreferredTime)
+			addr->preferred = MaxPreferredTime;
 
 		if (addr->valid > MaxValidTime)
 			addr->valid = MaxValidTime;
