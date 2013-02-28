@@ -449,7 +449,9 @@ static void handle_rtnetlink(_unused void *addr, void *data, size_t len,
 				(NUD_REACHABLE | NUD_STALE | NUD_DELAY | NUD_PROBE
 						| NUD_PERMANENT | NUD_NOARP)));
 
-		modify_neighbor(addr, iface, add);
+		if (config->enable_ndp_relay)
+			modify_neighbor(addr, iface, add);
+
 		if (is_addr && config->enable_router_discovery_server)
 			raise(SIGUSR1); // Inform about a change in addresses
 
