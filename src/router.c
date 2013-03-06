@@ -10,8 +10,6 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
  *
- * with parts taken from dnsmasq, Copyright 2000-2012 Simon Kelley
- *
  */
 
 #include <errno.h>

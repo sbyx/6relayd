@@ -10,9 +10,6 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
  *
- *
- * with parts taken from relayd, Copyright 2010 Felix Fietkau <nbd@openwrt.org>
- *
  */
 
 #include <stdlib.h>
