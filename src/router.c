@@ -211,7 +211,10 @@ static bool have_default_route(void)
 static void send_router_advert(struct relayd_event *event)
 {
 	uint64_t overrun;
-	read(event->socket, &overrun, sizeof(overrun));
+	if (read(event->socket, &overrun, sizeof(overrun))) {
+		// Make the compiler happy
+	}
+
 	struct relayd_interface *iface =
 			container_of(event, struct relayd_interface, timer_rs);
 
