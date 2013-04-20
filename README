@@ -21,10 +21,10 @@ if simple stateless operation and no customization is required.
    relay:	RD relay between master and slave interfaces
    server:	RD server for slave interfaces
    a) support for rewriting announced DNS-server addresses in relay mode
+   b) support for automatically picking up announced prefixes in server mode
    
 3. DHCPv6-support with 3 modes of operation
    relay: 	mostly standards-compliant DHCPv6-relay
-   transparent:	relay for broken servers not accepting messages from relays
    server:	minimalistic server for stateless DHCPv6
    a) support for rewriting announced DNS-server addresses
    
@@ -41,6 +41,25 @@ if simple stateless operation and no customization is required.
 * To prepare a Makefile use:  "cmake ." 
 * To build / install use: "make" / "make install" afterwards.
 * To build DEB or RPM packages use: "make package" afterwards.
+
+
+** Server Mode **
+
+0. Server mode is used as a minimalistic alternative for full-blown servers
+   like radvd or ISC DHCP if simplicity or a small footprint matter.
+   Note: The master interface is unused in this mode. It should be set to '.'.
+
+1. If there are non-local addresses assigned to the slave interface when a
+   router solicitation is received, said prefixes are announced automatically
+   for stateless autoconfiguration.
+
+2. If DNS servers should be announced (DHCPv6 server-mode) then a local DNS-
+   proxy (e.g. dnsmasq) needs to be run on the router itself because 6relayd
+   will always announce a local address as DNS-server (if not otherwise
+   configured).
+
+3. 6relayd is run with the appropriate parameters (e.g. -S).
+   See 6relayd -h for command line parameters.
 
 
 ** Relay Mode **
@@ -63,19 +82,6 @@ if simple stateless operation and no customization is required.
    See 6relayd -h for command line parameters.
 
 
-** Server Mode **
+** Features currently in development **
 
-0. Server mode is used as a minimalistic alternative for full-blown servers
-   like radvd or ISC DHCP if simplicity or a small footprint matter.
-   Note: The master interface is unused in this mode. It should be set to '.'.
-
-1. If there are non-local addresses assigned to the slave interface when a
-   router solicitation is received, said prefixes are announced automatically
-   for stateless autoconfiguration.
-
-2. If DNS servers should be announced (DHCPv6 server-mode) then a local DNS-
-   proxy (e.g. dnsmasq) needs to be run on the router itself because 6relayd
-   will always announce a local address as DNS-server.
-
-3. 6relayd is run with the appropriate parameters (e.g. -S).
-   See 6relayd -h for command line parameters.
+1. Prefix Delegation support in server mode
