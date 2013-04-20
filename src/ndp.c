@@ -1,5 +1,5 @@
 /**
- * Copyright (C) 2012 Steven Barth <steven@midlink.org>
+ * Copyright (C) 2012-2013 Steven Barth <steven@midlink.org>
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License v2 as published by
@@ -459,6 +459,19 @@ static void handle_rtnetlink(_unused void *addr, void *data, size_t len,
 
 		if (is_addr && config->enable_router_discovery_server)
 			raise(SIGUSR1); // Inform about a change in addresses
+
+		if (is_addr && iface == &config->master) {
+			// Replay address changes on all slave interfaces
+			nh->nlmsg_flags |= NLM_F_REQUEST;
+
+			if (nh->nlmsg_type == RTM_NEWADDR)
+				nh->nlmsg_flags |= NLM_F_CREATE | NLM_F_REPLACE;
+
+			for (size_t i = 0; i < config->slavecount; ++i) {
+				ifa->ifa_index = config->slaves[i].ifindex;
+				send(rtnl_event.socket, nh, nh->nlmsg_len, MSG_DONTWAIT);
+			}
+		}
 
 		/* TODO: See if this is required for optimal operation
 		// Keep neighbor entries alive so we don't loose routes

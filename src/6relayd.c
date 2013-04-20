@@ -1,5 +1,5 @@
 /**
- * Copyright (C) 2012 Steven Barth <steven@midlink.org>
+ * Copyright (C) 2012-2013 Steven Barth <steven@midlink.org>
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License v2 as published by
@@ -60,7 +60,7 @@ int main(int argc, char* const argv[])
 	bool daemonize = false;
 	int verbosity = 0;
 	int c;
-	while ((c = getopt(argc, argv, "ASR:D:NFslucn::rp:dvh")) != -1) {
+	while ((c = getopt(argc, argv, "ASR:D:NFsucn::rp:dvh")) != -1) {
 		switch (c) {
 		case 'A':
 			config.enable_router_discovery_relay = true;
@@ -69,7 +69,6 @@ int main(int argc, char* const argv[])
 			config.enable_forwarding = true;
 			config.send_router_solicitation = true;
 			config.enable_route_learning = true;
-			config.force_address_assignment = true;
 			break;
 
 		case 'S':
@@ -105,10 +104,6 @@ int main(int argc, char* const argv[])
 
 		case 's':
 			config.send_router_solicitation = true;
-			break;
-
-		case 'l':
-			config.force_address_assignment = true;
 			break;
 
 		case 'u':
@@ -258,7 +253,7 @@ static int print_usage(const char *name)
 	"Usage: %s [options] <master> [[~]<slave1> [[~]<slave2> [...]]]\n"
 	"\nNote: to use server features only (no relaying) set master to '.'\n"
 	"\nFeatures:\n"
-	"	-A		Automatic relay (defaults: RrelayDrelayNFslr)\n"
+	"	-A		Automatic relay (defaults: RrelayDrelayNFsr)\n"
 	"	-S		Automatic server (defaults: RserverDserver)\n"
 	"	-R <mode>	Enable Router Discovery support (RD)\n"
 	"	   relay	relay mode\n"
@@ -270,7 +265,6 @@ static int print_usage(const char *name)
 	"	-F		Enable Forwarding for interfaces\n"
 	"\nFeature options:\n"
 	"	-s		Send initial RD-Solicitation to <master>\n"
-	"	-l		RD: Force local address assignment\n"
 	"	-u		RD: Assume default router even with ULA only\n"
 	"	-c		RD: ULA-compatibility with broken devices\n"
 	"	-n		RD/DHCPv6: always rewrite name server\n"

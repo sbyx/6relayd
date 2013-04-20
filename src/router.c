@@ -1,5 +1,5 @@
 /**
- * Copyright (C) 2012 Steven Barth <steven@midlink.org>
+ * Copyright (C) 2012-2013 Steven Barth <steven@midlink.org>
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License v2 as published by
@@ -108,13 +108,6 @@ void deinit_router_discovery_relay(void)
 		for (size_t i = 0; i < config->slavecount; ++i)
 			send_router_advert(&config->slaves[i].timer_rs);
 	}
-
-	if (config->enable_router_discovery_relay &&
-			!config->enable_router_discovery_server &&
-			config->force_address_assignment)
-		for (size_t i = 0; i < config->slavecount; ++i)
-			relayd_sysctl_interface(config->slaves[i].ifname,
-					"accept_ra", "2");
 }
 
 
@@ -232,7 +225,7 @@ static void send_router_advert(struct relayd_event *event)
 		.lladdr = {ND_OPT_SOURCE_LINKADDR, 1, {0}},
 		.mtu = {ND_OPT_MTU, 1, 0, htonl(mtu)},
 	};
-	adv.h.nd_ra_flags_reserved = ND_RA_FLAG_OTHER;
+	adv.h.nd_ra_flags_reserved = ND_RA_FLAG_OTHER | ND_RA_FLAG_MANAGED;
 	memcpy(adv.lladdr.data, iface->mac, sizeof(adv.lladdr.data));
 
 	// If not currently shutting down
@@ -372,11 +365,6 @@ static void forward_router_solicitation(const struct relayd_interface *iface)
 	struct iovec iov = {&rs, sizeof(rs)};
 	struct sockaddr_in6 all_routers =
 		{AF_INET6, 0, 0, ALL_IPV6_ROUTERS, iface->ifindex};
-
-	if (config->force_address_assignment)
-		for (size_t i = 0; i < config->slavecount; ++i)
-			relayd_sysctl_interface(config->slaves[i].ifname,
-					"accept_ra", "2");
 
 	syslog(LOG_NOTICE, "Sending RS to %s", iface->ifname);
 	relayd_forward_packet(router_discovery_event.socket,
