@@ -14,6 +14,7 @@
 
 #include <time.h>
 #include <errno.h>
+#include <fcntl.h>
 #include <stdio.h>
 #include <stddef.h>
 #include <stdlib.h>
@@ -46,6 +47,7 @@ static volatile bool do_stop = false;
 
 static int rtnl_socket = -1;
 static int rtnl_seq = 0;
+static int urandom_fd = -1;
 
 static int print_usage(const char *name);
 static void set_stop(_unused int signal);
@@ -181,7 +183,9 @@ int main(int argc, char* const argv[])
 			return 3;
 	}
 
-	srandom(clock() ^ getpid());
+	if ((urandom_fd = open("/dev/urandom", O_RDONLY | O_CLOEXEC)) < 0)
+		return 4;
+
 	struct sigaction sa = {.sa_handler = SIG_IGN};
 	sigaction(SIGUSR1, &sa, NULL);
 
@@ -243,6 +247,7 @@ int main(int argc, char* const argv[])
 	deinit_ndp_proxy();
 	deinit_router_discovery_relay();
 	free(config.slaves);
+	close(urandom_fd);
 	return 0;
 }
 
@@ -578,4 +583,10 @@ static void relayd_receive_packets(struct relayd_event *event)
 
 		event->handle_dgram(&addr, data_buf, len, iface);
 	}
+}
+
+
+void relayd_urandom(void *data, size_t len)
+{
+	read(urandom_fd, data, len);
 }

@@ -1,15 +1,14 @@
 /**
- *   6relayd - IPv6 relay daemon
- *   Copyright (C) 2012 Steven Barth <steven@midlink.org>
+ * Copyright (C) 2012-2013 Steven Barth <steven@midlink.org>
  *
- *   This program is free software; you can redistribute it and/or modify
- *   it under the terms of the GNU General Public License version 2
- *   as published by the Free Software Foundation.
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License v2 as published by
+ * the Free Software Foundation.
  *
- *   This program is distributed in the hope that it will be useful,
- *   but WITHOUT ANY WARRANTY; without even the implied warranty of
- *   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- *   GNU General Public License version 2 for more details.
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
  *
  */
 
@@ -19,6 +18,8 @@
 #include <net/if.h>
 #include <stdbool.h>
 #include <syslog.h>
+
+#include "list.h"
 
 #define ARRAY_SIZE(arr) (sizeof(arr) / sizeof((arr)[0]))
 
@@ -30,6 +31,7 @@
 #define RELAYD_MAX_PREFIXES 8
 
 #define _unused __attribute__((unused))
+#define _packed __attribute__((packed))
 
 
 #define ALL_IPV6_NODES {{{0xff, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,\
@@ -49,6 +51,14 @@ struct relayd_event {
 };
 
 
+struct relayd_ipaddr {
+	struct in6_addr addr;
+	uint8_t prefix;
+	uint32_t preferred;
+	uint32_t valid;
+};
+
+
 struct relayd_interface {
 	int ifindex;
 	char ifname[IF_NAMESIZE];
@@ -56,6 +66,11 @@ struct relayd_interface {
 	bool external;
 
 	struct relayd_event timer_rs;
+
+	// IPv6 PD
+	struct list_head pd_assignments;
+	struct relayd_ipaddr pd_addr[8];
+	size_t pd_addr_len;
 };
 
 
@@ -69,7 +84,6 @@ struct relayd_config {
 	bool enable_ndp_relay;
 	bool enable_route_learning;
 
-	bool force_address_assignment;
 	bool send_router_solicitation;
 	bool always_rewrite_dns;
 	bool always_announce_default_router;
@@ -80,14 +94,6 @@ struct relayd_config {
 	struct relayd_interface *slaves;
 	size_t slavecount;
 
-};
-
-
-struct relayd_ipaddr {
-	struct in6_addr addr;
-	uint8_t prefix;
-	uint32_t preferred;
-	uint32_t valid;
 };
 
 
@@ -103,6 +109,7 @@ int relayd_get_interface_mtu(const char *ifname);
 struct relayd_interface* relayd_get_interface_by_index(int ifindex);
 int relayd_sysctl_interface(const char *ifname, const char *option,
 		const char *data);
+void relayd_urandom(void *data, size_t len);
 
 
 // Exported module initializers

@@ -352,7 +352,8 @@ static void send_router_advert(struct relayd_event *event)
 
 	// Rearm timer
 	struct itimerspec val = {{0,0}, {0,0}};
-	val.it_value.tv_sec = (random() % (MaxRtrAdvInterval
+	relayd_urandom(&val.it_value.tv_sec, sizeof(val.it_value.tv_sec));
+	val.it_value.tv_sec = (val.it_value.tv_sec % (MaxRtrAdvInterval
 			- MinRtrAdvInterval)) + MinRtrAdvInterval;
 	timerfd_settime(event->socket, 0, &val, NULL);
 }

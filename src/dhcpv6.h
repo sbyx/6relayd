@@ -24,8 +24,11 @@
 
 #define DHCPV6_MSG_SOLICIT 1
 #define DHCPV6_MSG_ADVERTISE 2
+#define DHCPV6_MSG_REQUEST 3
+#define DHCPV6_MSG_RENEW 5
 #define DHCPV6_MSG_REBIND 6
 #define DHCPV6_MSG_REPLY 7
+#define DHCPV6_MSG_RELEASE 8
 #define DHCPV6_MSG_RECONFIGURE 10
 #define DHCPV6_MSG_INFORMATION_REQUEST 11
 #define DHCPV6_MSG_RELAY_FORW 12
@@ -38,12 +41,20 @@
 #define DHCPV6_OPT_RELAY_MSG 9
 #define DHCPV6_OPT_AUTH 11
 #define DHCPV6_OPT_INTERFACE_ID 18
+#define DHCPV6_OPT_RECONF_MSG 19
+#define DHCPV6_OPT_RECONF_ACCEPT 20
 #define DHCPV6_OPT_DNS_SERVERS 23
 #define DHCPV6_OPT_DNS_DOMAIN 24
+#define DHCPV6_OPT_IA_PD 25
+#define DHCPV6_OPT_IA_PREFIX 26
 #define DHCPV6_OPT_INFO_REFRESH 32
 
 #define DHCPV6_DUID_VENDOR 2
+
+#define DHCPV6_STATUS_OK 0
 #define DHCPV6_STATUS_NOADDRSAVAIL 2
+#define DHCPV6_STATUS_NOBINDING 3
+#define DHCPV6_STATUS_NOPREFIXAVAIL 6
 
 // I just remembered I have an old one lying around...
 #define DHCPV6_ENT_NO  30462
@@ -55,7 +66,6 @@
 struct dhcpv6_client_header {
 	uint8_t msg_type;
 	uint8_t transaction_id[3];
-	uint8_t options[];
 } __attribute__((packed));
 
 struct dhcpv6_relay_header {
@@ -78,13 +88,35 @@ struct dhcpv6_relay_forward_envelope {
 	uint16_t relay_message_len;
 } __attribute__((packed));
 
-struct dhcpv6_broken_duid {
-	uint16_t duid_type;
-	uint32_t vendor;
-	uint16_t subtype;
-	uint32_t iface_index;
-	struct in6_addr link_addr;
-} __attribute__((packed));
+struct dhcpv6_auth_reconfigure {
+	uint16_t type;
+	uint16_t len;
+	uint8_t protocol;
+	uint8_t algorithm;
+	uint8_t rdm;
+	uint32_t replay[2];
+	uint8_t reconf_type;
+	uint8_t key[16];
+} _packed;
+
+struct dhcpv6_ia_hdr {
+	uint16_t type;
+	uint16_t len;
+	uint32_t iaid;
+	uint32_t t1;
+	uint32_t t2;
+} _packed;
+
+struct dhcpv6_ia_prefix {
+	uint16_t type;
+	uint16_t len;
+	uint32_t preferred;
+	uint32_t valid;
+	uint8_t prefix;
+	struct in6_addr addr;
+} _packed;
+
+
 
 
 #define dhcpv6_for_each_option(start, end, otype, olen, odata)\
@@ -92,3 +124,7 @@ struct dhcpv6_broken_duid {
 		((otype) = _o[0] << 8 | _o[1]) && ((odata) = (void*)&_o[4]) &&\
 		((olen) = _o[2] << 8 | _o[3]) + (odata) <= (end); \
 		_o += 4 + (_o[2] << 8 | _o[3]))
+
+int dhcpv6_init_pd(const struct relayd_config *relayd_config, int socket);
+size_t dhcpv6_handle_pd(uint8_t *buf, size_t buflen, struct relayd_interface *iface,
+		const struct sockaddr_in6 *addr, const void *data, const uint8_t *end);

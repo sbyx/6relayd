@@ -1,5 +1,5 @@
 /**
- * Copyright (C) 2012 Steven Barth <steven@midlink.org>
+ * Copyright (C) 2012-2013 Steven Barth <steven@midlink.org>
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License v2 as published by
@@ -53,6 +53,8 @@ int init_dhcpv6_relay(const struct relayd_config *relayd_config)
 				strerror(errno));
 		return -1;
 	}
+
+	dhcpv6_init_pd(relayd_config, dhcpv6_event.socket);
 
 
 	// Configure multicast settings
@@ -111,7 +113,7 @@ static void handle_nested_message(uint8_t *data, size_t len,
 	if (hdr->msg_type != DHCPV6_MSG_RELAY_FORW) {
 		iov[0].iov_len = data - (uint8_t*)iov[0].iov_base;
 		struct dhcpv6_client_header *hdr = (void*)data;
-		*opts = hdr->options;
+		*opts = (uint8_t*)&hdr[1];
 		*end = data + len;
 		return;
 	}
@@ -120,8 +122,8 @@ static void handle_nested_message(uint8_t *data, size_t len,
 	uint8_t *odata;
 	dhcpv6_for_each_option(hdr->options, data + len, otype, olen, odata) {
 		if (otype == DHCPV6_OPT_RELAY_MSG) {
-			iov[4].iov_base = odata + olen;
-			iov[4].iov_len = (data + len) - (odata + olen);
+			iov[5].iov_base = odata + olen;
+			iov[5].iov_len = (data + len) - (odata + olen);
 			handle_nested_message(odata, olen, opts, end, iov);
 			return;
 		}
@@ -223,20 +225,23 @@ static void handle_client_request(void *addr, void *data, size_t len,
 
 	}
 
+	uint8_t pdbuf[512];
 	struct iovec iov[] = {{NULL, 0}, {&dest, (uint8_t*)&dest.clientid_type
 			- (uint8_t*)&dest}, {NULL, 0}, {&domain, domain_len},
-			{NULL, 0}};
+			{pdbuf, 0}, {NULL, 0}};
 
-	uint8_t *opts = hdr->options, *opts_end = (uint8_t*)data + len;
+	uint8_t *opts = (uint8_t*)&hdr[1], *opts_end = (uint8_t*)data + len;
 	if (hdr->msg_type == DHCPV6_MSG_RELAY_FORW)
 		handle_nested_message(data, len, &opts, &opts_end, iov);
 	if (opts[-4] == DHCPV6_MSG_SOLICIT) {
 		dest.msg_type = DHCPV6_MSG_ADVERTISE;
-	} else if (opts[-4] == DHCPV6_MSG_REBIND) {
-		return; // Don't answer rebinds, as we don't do stateful
 	} else if (opts[-4] == DHCPV6_MSG_INFORMATION_REQUEST) {
 		iov[2].iov_base = &refresh;
 		iov[2].iov_len = sizeof(refresh);
+	} else if (opts[-4] == DHCPV6_MSG_RELEASE) {
+		iov[2].iov_base = &stat;
+		iov[2].iov_len = sizeof(stat);
+		stat.value = 0;
 	}
 
 	// Go through options and find what we need
@@ -251,11 +256,15 @@ static void handle_client_request(void *addr, void *data, size_t len,
 			if (olen != ntohs(dest.serverid_length) ||
 					memcmp(odata, &dest.duid_type, olen))
 				return; // Not for us
-		} else if (otype == DHCPV6_OPT_IA_NA) {
+		} else if (otype == DHCPV6_OPT_IA_NA && opts[-4] != DHCPV6_MSG_RELEASE) {
 			iov[2].iov_base = &stat;
 			iov[2].iov_len = sizeof(stat);
 		}
 	}
+
+	iov[4].iov_len = dhcpv6_handle_pd(pdbuf, sizeof(pdbuf), iface, addr, &opts[-4], opts_end);
+	if (iov[4].iov_len == 0 && opts[-4] == DHCPV6_MSG_REBIND)
+		return;
 
 	if (iov[0].iov_len > 0) // Update length
 		update_nested_message(data, len, iov[1].iov_len +
@@ -335,7 +344,7 @@ static void relay_server_response(uint8_t *data, size_t len)
 		struct dhcpv6_client_header *h = (void*)payload_data;
 		end = payload_data + payload_len;
 
-		dhcpv6_for_each_option(h->options, end, otype, olen, odata) {
+		dhcpv6_for_each_option(&h[1], end, otype, olen, odata) {
 			if (otype == DHCPV6_OPT_DNS_SERVERS && olen >= 16) {
 				dns_ptr = (struct in6_addr*)odata;
 				dns_count = olen / 16;
