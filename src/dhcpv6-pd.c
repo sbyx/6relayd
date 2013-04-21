@@ -295,8 +295,8 @@ static size_t append_reply(uint8_t *buf, size_t buflen, uint16_t status,
 		memcpy(buf + datalen, &stat, sizeof(stat));
 		datalen += sizeof(stat);
 	} else {
-		time_t pref = 86400;
-		time_t valid = 86400;
+		uint32_t pref = 86400;
+		uint32_t valid = 86400;
 
 		for (size_t i = 0; i < iface->pd_addr_len; ++i) {
 			struct dhcpv6_ia_prefix p = {
