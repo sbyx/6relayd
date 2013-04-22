@@ -27,6 +27,7 @@ if simple stateless operation and no customization is required.
    relay: 	mostly standards-compliant DHCPv6-relay
    server:	minimalistic server for stateless DHCPv6
    a) support for rewriting announced DNS-server addresses
+   b) support for DHCPv6-PD in server mode
    
 4. Proxy for Neighbor Discovery messages (solicitations and advertisments)
    a) support for auto-learning routes to the local routing table
@@ -81,7 +82,3 @@ if simple stateless operation and no customization is required.
 3. 6relayd is run with the appropriate parameters (e.g. -A).
    See 6relayd -h for command line parameters.
 
-
-** Features currently in development **
-
-1. Prefix Delegation support in server mode
