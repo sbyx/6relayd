@@ -465,7 +465,7 @@ static void handle_rtnetlink(_unused void *addr, void *data, size_t len,
 
 		if (is_addr && iface == &config->master) {
 			// Replay address changes on all slave interfaces
-			nh->nlmsg_flags |= NLM_F_REQUEST;
+			nh->nlmsg_flags = NLM_F_REQUEST;
 
 			if (nh->nlmsg_type == RTM_NEWADDR)
 				nh->nlmsg_flags |= NLM_F_CREATE | NLM_F_REPLACE;
