@@ -110,8 +110,9 @@ static int send_reconf(struct relayd_interface *iface, struct assignment *assign
 		.clid_len = htons(assign->clid_len),
 		.clid_data = {0},
 	};
+
 	memcpy(reconf_msg.clid_data, assign->clid_data, assign->clid_len);
-	struct iovec iov = {&reconf_msg, sizeof(reconf_msg) + assign->clid_len};
+	struct iovec iov = {&reconf_msg, sizeof(reconf_msg) - 128 + assign->clid_len};
 
 	md5_state_t md5;
 	uint8_t secretbytes[16];
@@ -136,35 +137,6 @@ static int send_reconf(struct relayd_interface *iface, struct assignment *assign
 	md5_finish(&md5, reconf_msg.auth.key);
 
 	return relayd_forward_packet(socket_fd, &assign->peer, &iov, 1, iface);
-}
-
-
-static void reconf_timer(struct relayd_event *event)
-{
-	uint64_t cnt;
-	if (read(event->socket, &cnt, sizeof(cnt))) {
-		// Avoid compiler warning
-	}
-
-	time_t now = monotonic_time();
-	for (size_t i = 0; i < config->slavecount; ++i) {
-		struct relayd_interface *iface = &config->slaves[i];
-		if (iface->pd_assignments.next == NULL)
-			return;
-
-		struct assignment *a, *n;
-		list_for_each_entry_safe(a, n, &iface->pd_assignments, head) {
-			if (a->valid_until > now) {
-				list_del(&a->head);
-				free(a);
-			} else if (a->reconf_cnt > 0 && a->reconf_cnt < 8 &&
-					now > a->reconf_sent + (1 << a->reconf_cnt)) {
-				++a->reconf_cnt;
-				a->reconf_sent = now;
-				send_reconf(iface, a);
-			}
-		}
-	}
 }
 
 
@@ -217,8 +189,6 @@ static bool assign(struct relayd_interface *iface, struct assignment *assign)
 
 static void update(struct relayd_interface *iface)
 {
-	int min_prefix_len = -1;
-
 	if (iface->pd_assignments.next == NULL) {
 		INIT_LIST_HEAD(&iface->pd_assignments);
 		struct assignment *border = calloc(1, sizeof(*border));
@@ -239,27 +209,36 @@ static void update(struct relayd_interface *iface)
 		if (addr[i].prefix > minprefix)
 			minprefix = addr[i].prefix;
 
-		addr[i].preferred += now;
-		addr[i].valid += now;
+		addr[i].addr.s6_addr32[2] = 0;
+		addr[i].addr.s6_addr32[3] = 0;
+
+		if (addr[i].preferred < UINT32_MAX - now)
+			addr[i].preferred += now;
+
+		if (addr[i].valid < UINT32_MAX - now)
+			addr[i].valid += now;
 	}
 
 	struct assignment *border = list_last_entry(&iface->pd_assignments, struct assignment, head);
-	border->assigned = 1 << (64 - min_prefix_len);
+	border->assigned = 1 << (64 - minprefix);
 
 	bool change = len != (int)iface->pd_addr_len
 			|| memcmp(iface->pd_addr, addr, len * sizeof(*border));
 
-	memcpy(iface->pd_addr, addr, len * sizeof(*border));
+	memcpy(iface->pd_addr, addr, len * sizeof(*addr));
 	iface->pd_addr_len = len;
 
 	if (change) {
 		struct list_head reassign = LIST_HEAD_INIT(reassign);
 		struct assignment *c, *d;
 		list_for_each_entry_safe(c, d, &iface->pd_assignments, head) {
+			if (c->clid_len == 0)
+				continue;
+
 			c->reconf_sent = now;
 			c->reconf_cnt = 1;
 
-			if (c->assigned >= border->assigned)
+			if (c->assigned >= border->assigned && c != border)
 				list_move(&c->head, &reassign);
 
 			send_reconf(iface, c);
@@ -277,6 +256,40 @@ static void update(struct relayd_interface *iface)
 }
 
 
+static void reconf_timer(struct relayd_event *event)
+{
+	uint64_t cnt;
+	if (read(event->socket, &cnt, sizeof(cnt))) {
+		// Avoid compiler warning
+	}
+
+	time_t now = monotonic_time();
+	for (size_t i = 0; i < config->slavecount; ++i) {
+		struct relayd_interface *iface = &config->slaves[i];
+		if (iface->pd_assignments.next == NULL)
+			return;
+
+		struct assignment *a, *n;
+		list_for_each_entry_safe(a, n, &iface->pd_assignments, head) {
+			if (a->valid_until < now && a->clid_len > 0) {
+				list_del(&a->head);
+				free(a);
+			} else if (a->reconf_cnt > 0 && a->reconf_cnt < 8 &&
+					now > a->reconf_sent + (1 << a->reconf_cnt)) {
+				++a->reconf_cnt;
+				a->reconf_sent = now;
+				send_reconf(iface, a);
+			}
+		}
+
+		if (iface->pd_reconf) {
+			update(iface);
+			iface->pd_reconf = false;
+		}
+	}
+}
+
+
 static size_t append_reply(uint8_t *buf, size_t buflen, uint16_t status,
 		const struct dhcpv6_ia_hdr *ia, struct assignment *a,
 		struct relayd_interface *iface)
@@ -286,6 +299,7 @@ static size_t append_reply(uint8_t *buf, size_t buflen, uint16_t status,
 
 	struct dhcpv6_ia_hdr out = {htons(DHCPV6_OPT_IA_PD), 0, ia->iaid, 0, 0};
 	size_t datalen = sizeof(out);
+	time_t now = monotonic_time();
 
 	if (status) {
 		struct __attribute__((packed)) {
@@ -298,38 +312,84 @@ static size_t append_reply(uint8_t *buf, size_t buflen, uint16_t status,
 		memcpy(buf + datalen, &stat, sizeof(stat));
 		datalen += sizeof(stat);
 	} else {
-		uint32_t pref = 86400;
-		uint32_t valid = 86400;
-
-		for (size_t i = 0; i < iface->pd_addr_len; ++i) {
-			struct dhcpv6_ia_prefix p = {
-				.type = htons(DHCPV6_OPT_IA_PREFIX),
-				.len = htons(sizeof(p) - 4),
-				.preferred = htonl(iface->pd_addr[i].preferred),
-				.valid = htonl(iface->pd_addr[i].valid),
-				.prefix = a->length,
-				.addr = iface->pd_addr[i].addr
-			};
-			p.addr.s6_addr32[1] |= htonl(a->assigned);
-
-			if (datalen + sizeof(p) > buflen)
+		uint8_t *odata, *end = (uint8_t*)ia + htons(ia->len) - 4;
+		uint16_t otype, olen;
+		dhcpv6_for_each_option((uint8_t*)&ia[1], end, otype, olen, odata) {
+			struct dhcpv6_ia_prefix *p = (struct dhcpv6_ia_prefix*)&odata[-4];
+			if (otype != DHCPV6_OPT_IA_PREFIX || olen < sizeof(*p) - 4)
 				continue;
 
-			if (iface->pd_addr[i].preferred < pref &&
-					iface->pd_addr[i].preferred > 7200)
-				pref = iface->pd_addr[i].preferred;
+			bool found = false;
+			if (a) {
+				for (size_t i = 0; i < iface->pd_addr_len; ++i) {
+					struct in6_addr addr = iface->pd_addr[i].addr;
+					addr.s6_addr32[1] |= htonl(a->assigned);
 
-			if (iface->pd_addr[i].valid < valid &&
-					iface->pd_addr[i].valid > 7200)
-				valid = iface->pd_addr[i].valid;
+					if (IN6_ARE_ADDR_EQUAL(&p->addr, &addr) &&
+							p->prefix == a->length)
+						found = true;
+				}
+			}
 
-			memcpy(buf + datalen, &p, sizeof(p));
-			datalen += sizeof(p);
+			if (!found) {
+				struct dhcpv6_ia_prefix inv = {
+					.type = htons(DHCPV6_OPT_IA_PREFIX),
+					.len = htons(sizeof(inv) - 4),
+					.preferred = 0,
+					.valid = 0,
+					.prefix = p->prefix,
+					.addr = p->addr
+				};
+
+				if (datalen + sizeof(inv) > buflen)
+					continue;
+
+				memcpy(buf + datalen, &inv, sizeof(inv));
+				datalen += sizeof(inv);
+			}
 		}
 
-		a->valid_until = valid;
-		out.t1 = htonl(pref * 5 / 10);
-		out.t2 = htonl(pref * 8 / 10);
+		if (a) {
+			uint32_t pref = 86400;
+			uint32_t valid = 86400;
+
+			for (size_t i = 0; i < iface->pd_addr_len; ++i) {
+				uint32_t prefix_pref = iface->pd_addr[i].preferred - now;
+				uint32_t prefix_valid = iface->pd_addr[i].valid - now;
+
+				if (prefix_pref > 86400)
+					prefix_pref = 86400;
+
+				if (prefix_valid > 86400)
+					prefix_valid = 86400;
+
+				struct dhcpv6_ia_prefix p = {
+					.type = htons(DHCPV6_OPT_IA_PREFIX),
+					.len = htons(sizeof(p) - 4),
+					.preferred = htonl(prefix_pref),
+					.valid = htonl(prefix_valid),
+					.prefix = a->length,
+					.addr = iface->pd_addr[i].addr
+				};
+				p.addr.s6_addr32[1] |= htonl(a->assigned);
+
+				if (datalen + sizeof(p) > buflen)
+					continue;
+
+				if (prefix_pref < pref && prefix_pref > 7200)
+					pref = prefix_pref;
+
+				if (prefix_valid < valid && prefix_valid > 7200)
+					valid = prefix_valid;
+
+				memcpy(buf + datalen, &p, sizeof(p));
+				datalen += sizeof(p);
+			}
+
+			a->valid_until = valid;
+			out.t1 = htonl(pref * 5 / 10);
+			out.t2 = htonl(pref * 8 / 10);
+		}
 	}
 
 	out.len = htons(datalen - 4);
@@ -355,16 +415,18 @@ size_t dhcpv6_handle_pd(uint8_t *buf, size_t buflen, struct relayd_interface *if
 		}
 	}
 
-	if (!clid_data)
+	if (!clid_data || !clid_len)
 		goto out;
 
 	update(iface);
 
+	struct assignment *first = NULL;
 	dhcpv6_for_each_option(start, end, otype, olen, odata) {
 		if (otype != DHCPV6_OPT_IA_PD)
 			continue;
 
 		struct dhcpv6_ia_hdr *ia = (struct dhcpv6_ia_hdr*)&odata[-4];
+		size_t ia_response_len = 0;
 		uint8_t reqlen = 62;
 		uint32_t reqhint = 0;
 
@@ -391,35 +453,46 @@ size_t dhcpv6_handle_pd(uint8_t *buf, size_t buflen, struct relayd_interface *if
 			a->length = reqlen;
 			a->peer = *addr;
 			a->assigned = reqhint;
-			relayd_urandom(a->key, sizeof(a->key));
+			if (first)
+				memcpy(a->key, first->key, sizeof(a->key));
+			else
+				relayd_urandom(a->key, sizeof(a->key));
 			memcpy(a->clid_data, clid_data, clid_len);
 
 			bool assigned;
 			while (!(assigned = assign(iface, a)) && ++a->length <= 64);
 
 			uint16_t status = (assigned) ? DHCPV6_STATUS_OK : DHCPV6_STATUS_NOPREFIXAVAIL;
-			if (hdr->msg_type == DHCPV6_MSG_SOLICIT) {
-				*buf++ = 0;
-				*buf++ = DHCPV6_OPT_RECONF_ACCEPT;
-				*buf++ = 0;
-				*buf++ = 0;
-				buflen -= 4;
-			} else if (hdr->msg_type == DHCPV6_MSG_REQUEST) {
-				struct dhcpv6_auth_reconfigure auth = {
-					htons(DHCPV6_OPT_AUTH),
-					htons(sizeof(auth) - 4),
-					3, 1, 0,
-					{htonl(time(NULL)), htonl(++serial)},
-					1,
-					{0}
-				};
-				memcpy(auth.key, a->key, sizeof(a->key));
-				memcpy(buf, &auth, sizeof(auth));
-				buf += sizeof(auth);
-				buflen -= sizeof(auth);
+
+			if (!first && assigned) {
+				size_t handshake_len = 0;
+				if (hdr->msg_type == DHCPV6_MSG_SOLICIT) {
+					buf[0] = 0;
+					buf[1] = DHCPV6_OPT_RECONF_ACCEPT;
+					buf[2] = 0;
+					buf[3] = 0;
+					handshake_len = 4;
+				} else if (hdr->msg_type == DHCPV6_MSG_REQUEST) {
+					struct dhcpv6_auth_reconfigure auth = {
+						htons(DHCPV6_OPT_AUTH),
+						htons(sizeof(auth) - 4),
+						3, 1, 0,
+						{htonl(time(NULL)), htonl(++serial)},
+						1,
+						{0}
+					};
+					memcpy(auth.key, a->key, sizeof(a->key));
+					memcpy(buf, &auth, sizeof(auth));
+					handshake_len = sizeof(auth);
+				}
+				buf += handshake_len;
+				buflen -= handshake_len;
+				response_len += handshake_len;
+
+				first = a;
 			}
 
-			append_reply(buf, buflen, status, ia, a, iface);
+			ia_response_len = append_reply(buf, buflen, status, ia, a, iface);
 
 			// Was only a solicitation so remove binding
 			if (assigned && hdr->msg_type == DHCPV6_MSG_SOLICIT) {
@@ -434,17 +507,22 @@ size_t dhcpv6_handle_pd(uint8_t *buf, size_t buflen, struct relayd_interface *if
 				hdr->msg_type == DHCPV6_MSG_REBIND) {
 			struct assignment *a = find(iface, clid_data, clid_len, ia->iaid);
 			if (!a && hdr->msg_type != DHCPV6_MSG_REBIND) {
-				append_reply(buf, buflen, DHCPV6_STATUS_NOBINDING, ia, a, iface);
-			} else if (hdr->msg_type == DHCPV6_MSG_RENEW ||
-					hdr->msg_type == DHCPV6_MSG_REBIND) {
-				a->reconf_cnt = 0;
-				a->reconf_sent = 0;
-				append_reply(buf, buflen, DHCPV6_STATUS_OK, ia, a, iface);
+				ia_response_len = append_reply(buf, buflen, DHCPV6_STATUS_NOBINDING, ia, a, iface);
+			} else if (hdr->msg_type == DHCPV6_MSG_RENEW || hdr->msg_type == DHCPV6_MSG_REBIND) {
+				if (a) {
+					a->reconf_cnt = 0;
+					a->reconf_sent = 0;
+				}
+				ia_response_len = append_reply(buf, buflen, DHCPV6_STATUS_OK, ia, a, iface);
 			} else if (hdr->msg_type == DHCPV6_MSG_RELEASE) {
 				list_del(&a->head);
 				free(a);
 			}
 		}
+
+		buf += ia_response_len;
+		buflen -= ia_response_len;
+		response_len += ia_response_len;
 	}
 
 out:

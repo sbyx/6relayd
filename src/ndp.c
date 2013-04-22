@@ -460,6 +460,9 @@ static void handle_rtnetlink(_unused void *addr, void *data, size_t len,
 		if (is_addr && config->enable_router_discovery_server)
 			raise(SIGUSR1); // Inform about a change in addresses
 
+		if (is_addr && config->enable_dhcpv6_server)
+			iface->pd_reconf = true;
+
 		if (is_addr && iface == &config->master) {
 			// Replay address changes on all slave interfaces
 			nh->nlmsg_flags |= NLM_F_REQUEST;

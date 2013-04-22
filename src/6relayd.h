@@ -71,6 +71,7 @@ struct relayd_interface {
 	struct list_head pd_assignments;
 	struct relayd_ipaddr pd_addr[8];
 	size_t pd_addr_len;
+	bool pd_reconf;
 };
 
 
