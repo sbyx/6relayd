@@ -149,6 +149,9 @@ static void reconf_timer(struct relayd_event *event)
 	time_t now = monotonic_time();
 	for (size_t i = 0; i < config->slavecount; ++i) {
 		struct relayd_interface *iface = &config->slaves[i];
+		if (iface->pd_assignments.next == NULL)
+			return;
+
 		struct assignment *a, *n;
 		list_for_each_entry_safe(a, n, &iface->pd_assignments, head) {
 			if (a->valid_until > now) {
