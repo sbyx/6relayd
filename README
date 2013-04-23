@@ -23,7 +23,7 @@ if simple stateless operation and no customization is required.
    a) support for rewriting announced DNS-server addresses in relay mode
    b) support for automatically picking up announced prefixes in server mode
    
-3. DHCPv6-support with 3 modes of operation
+3. DHCPv6-support with 2 modes of operation
    relay: 	mostly standards-compliant DHCPv6-relay
    server:	minimalistic server for stateless DHCPv6
    a) support for rewriting announced DNS-server addresses
