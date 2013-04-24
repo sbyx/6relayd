@@ -225,7 +225,7 @@ static void send_router_advert(struct relayd_event *event)
 		.lladdr = {ND_OPT_SOURCE_LINKADDR, 1, {0}},
 		.mtu = {ND_OPT_MTU, 1, 0, htonl(mtu)},
 	};
-	adv.h.nd_ra_flags_reserved = ND_RA_FLAG_OTHER | ND_RA_FLAG_MANAGED;
+	adv.h.nd_ra_flags_reserved = ND_RA_FLAG_OTHER;
 	memcpy(adv.lladdr.data, iface->mac, sizeof(adv.lladdr.data));
 
 	// If not currently shutting down
