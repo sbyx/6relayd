@@ -1,16 +1,13 @@
-6relayd - IPv6 relay and autoconfiguration daemon
+6relayd - Embedded DHCPv6/RA Server & Relay
 
 ** Abstract **
 
-6relayd is an IPv6-tool that relays IPv6-management protocols like router
-discovery, neighbor discovery and DHCPv6 so that clients on routed (non-
-bridged) interfaces can use the public address prefix, DHCPv6 and DNS-service
-of a master interface. This is useful to avoid NAT in chained IPv6-routers.
+6relayd is a daemon for serving and relaying IPv6 management protocols to
+configure clients and downstream routers.
 
-6relayd can also be used as a minimalitisc autoconfiguration daemon for
-Router Discovery and stateless DHCPv6 without relaying and thus act as a
-minimalistic replacement for radvd and / or a full featured DHCPv6 server
-if simple stateless operation and no customization is required.
+6relayd provides server services for RA, stateless DHCPv6, DHCPv6-PD and can
+be used to relay RA, DHCPv6 and NDP between routed (non-bridged) interfaces
+in case no delegated prefixes are provided by the upstream router.
 
 
 ** Features **
@@ -18,16 +15,15 @@ if simple stateless operation and no customization is required.
 1. Configuration and setup for forwarding between local interfaces
 
 2. Router Discovery support (solicitations and advertisements) with 2 modes
-   relay:	RD relay between master and slave interfaces
    server:	RD server for slave interfaces
+   relay:	RD relay between master and slave interfaces
    a) support for rewriting announced DNS-server addresses in relay mode
    b) support for automatically picking up announced prefixes in server mode
    
 3. DHCPv6-support with 2 modes of operation
+   server:	minimalistic server for stateless DHCPv6 + DHCPv6-PD
    relay: 	mostly standards-compliant DHCPv6-relay
-   server:	minimalistic server for stateless DHCPv6
    a) support for rewriting announced DNS-server addresses
-   b) support for DHCPv6-PD in server mode
    
 4. Proxy for Neighbor Discovery messages (solicitations and advertisments)
    a) support for auto-learning routes to the local routing table
@@ -81,4 +77,3 @@ if simple stateless operation and no customization is required.
    
 3. 6relayd is run with the appropriate parameters (e.g. -A).
    See 6relayd -h for command line parameters.
-
