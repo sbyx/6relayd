@@ -9,12 +9,12 @@ configure clients and downstream routers.
 be used to relay RA, DHCPv6 and NDP between routed (non-bridged) interfaces
 in case no delegated prefixes are provided by the upstream router.
 
+It is optimized for embedded Linux routers and compiles to only about 35 KB.
+
 
 ** Features **
 
-1. Configuration and setup for forwarding between local interfaces
-
-2. Router Discovery support (solicitations and advertisements) with 2 modes
+1. Router Discovery support (solicitations and advertisements) with 2 modes
    server:	RD server for slave interfaces
    relay:	RD relay between master and slave interfaces
    a) support for rewriting announced DNS-server addresses in relay mode
@@ -48,7 +48,8 @@ in case no delegated prefixes are provided by the upstream router.
 
 1. If there are non-local addresses assigned to the slave interface when a
    router solicitation is received, said prefixes are announced automatically
-   for stateless autoconfiguration.
+   for stateless autoconfiguration. If the prefixes are bigger than /64 all but
+   the first /64 is offered via DHCPv6-PD to downstream routers.
 
 2. If DNS servers should be announced (DHCPv6 server-mode) then a local DNS-
    proxy (e.g. dnsmasq) needs to be run on the router itself because 6relayd
@@ -76,4 +77,4 @@ in case no delegated prefixes are provided by the upstream router.
    (This step can most likely be skipped in most environments.)
    
 3. 6relayd is run with the appropriate parameters (e.g. -A).
-   See 6relayd -h for command line parameters.
+   See 6relayd -h for command line paoffered.
