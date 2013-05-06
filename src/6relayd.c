@@ -62,7 +62,7 @@ int main(int argc, char* const argv[])
 	bool daemonize = false;
 	int verbosity = 0;
 	int c;
-	while ((c = getopt(argc, argv, "ASR:D:NFsucn::rp:dvh")) != -1) {
+	while ((c = getopt(argc, argv, "ASR:D:NFsucn::rt:p:dvh")) != -1) {
 		switch (c) {
 		case 'A':
 			config.enable_router_discovery_relay = true;
@@ -124,6 +124,12 @@ int main(int argc, char* const argv[])
 
 		case 'r':
 			config.enable_route_learning = true;
+			break;
+
+		case 't':
+			config.static_ndp = realloc(config.static_ndp,
+					sizeof(char*) * ++config.static_ndp_len);
+			config.static_ndp[config.static_ndp_len - 1] = optarg;
 			break;
 
 		case 'p':
@@ -274,6 +280,7 @@ static int print_usage(const char *name)
 	"	-c		RD: ULA-compatibility with broken devices\n"
 	"	-n		RD/DHCPv6: always rewrite name server\n"
 	"	-r		NDP: learn routes to neighbors\n"
+	"	-t <p>/<l>:<if>	NDP: define a static NDP-prefix on <if>\n"
 	"	slave prefix ~	NDP: don't proxy NDP for hosts and only\n"
 	"			serve NDP for DAD and traffic to router\n"
 	"\nInvocation options:\n"
@@ -518,6 +525,19 @@ struct relayd_interface* relayd_get_interface_by_index(int ifindex)
 
 	for (size_t i = 0; i < config.slavecount; ++i)
 		if (config.slaves[i].ifindex == ifindex)
+			return &config.slaves[i];
+
+	return NULL;
+}
+
+
+struct relayd_interface* relayd_get_interface_by_name(const char *name)
+{
+	if (!strcmp(config.master.ifname, name))
+		return &config.master;
+
+	for (size_t i = 0; i < config.slavecount; ++i)
+		if (!strcmp(config.slaves[i].ifname, name))
 			return &config.slaves[i];
 
 	return NULL;

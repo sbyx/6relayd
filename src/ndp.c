@@ -12,6 +12,7 @@
  *
  */
 
+#include <stdio.h>
 #include <stdlib.h>
 #include <signal.h>
 #include <errno.h>
@@ -35,7 +36,7 @@ static void handle_solicit(void *addr, void *data, size_t len,
 		struct relayd_interface *iface);
 static void handle_rtnetlink(void *addr, void *data, size_t len,
 		struct relayd_interface *iface);
-static struct ndp_neighbor* find_neighbor(struct in6_addr *addr);
+static struct ndp_neighbor* find_neighbor(struct in6_addr *addr, bool strict);
 static void modify_neighbor(struct in6_addr *addr, struct relayd_interface *iface,
 		bool add);
 static ssize_t ping6(struct in6_addr *addr,
@@ -100,6 +101,23 @@ int init_ndp_proxy(const struct relayd_config *relayd_config)
 	// Test if disabled
 	if (!config->enable_ndp_relay || config->slavecount < 1)
 		return 0;
+
+	for (size_t i = 0; i < config->static_ndp_len; ++i) {
+		struct ndp_neighbor *n = malloc(sizeof(*n));
+		n->timeout = 0;
+
+		char ipbuf[INET6_ADDRSTRLEN];
+		char iface[16];
+
+		if (sscanf(config->static_ndp[i], "%45s/%hhu:%15s", ipbuf, &n->len, iface) < 3
+				|| n->len > 128 || inet_pton(AF_INET6, ipbuf, &n->addr) != 1 ||
+				!(n->iface = relayd_get_interface_by_name(iface))) {
+			syslog(LOG_ERR, "Invalid static NDP-prefix %s", config->static_ndp[i]);
+			return -1;
+		}
+
+		list_add(&n->head, &neighbors);
+	}
 
 	// Create socket for intercepting NDP
 	int sock = socket(AF_PACKET, SOCK_DGRAM | SOCK_CLOEXEC | SOCK_NONBLOCK,
@@ -232,7 +250,7 @@ static void handle_solicit(void *addr, void *data, size_t len,
 
 	time_t now = time(NULL);
 
-	struct ndp_neighbor *n = find_neighbor(&req->nd_ns_target);
+	struct ndp_neighbor *n = find_neighbor(&req->nd_ns_target, false);
 	if (n && (n->iface || abs(n->timeout - now) < 5)) {
 		syslog(LOG_NOTICE, "%s is on %s", ipbuf,
 				(n->iface) ? n->iface->ifname : "<pending>");
@@ -341,12 +359,42 @@ static void free_neighbor(struct ndp_neighbor *n)
 	--neighbor_count;
 }
 
-static struct ndp_neighbor* find_neighbor(struct in6_addr *addr)
+
+static bool match_neighbor(struct ndp_neighbor *n, struct in6_addr *addr)
+{
+	if (n->len <= 32)
+		return ntohl(n->addr.s6_addr32[0]) >> (32 - n->len) ==
+				ntohl(addr->s6_addr32[0]) >> (32 - n->len);
+
+	if (n->addr.s6_addr32[0] != addr->s6_addr32[0])
+		return false;
+
+	if (n->len <= 64)
+		return ntohl(n->addr.s6_addr32[1]) >> (64 - n->len) ==
+				ntohl(addr->s6_addr32[1]) >> (64 - n->len);
+
+	if (n->addr.s6_addr32[1] != addr->s6_addr32[1])
+		return false;
+
+	if (n->len <= 96)
+		return ntohl(n->addr.s6_addr32[2]) >> (96 - n->len) ==
+				ntohl(addr->s6_addr32[2]) >> (96 - n->len);
+
+	if (n->addr.s6_addr32[2] != addr->s6_addr32[2])
+		return false;
+
+	return ntohl(n->addr.s6_addr32[3]) >> (128 - n->len) ==
+			ntohl(addr->s6_addr32[3]) >> (128 - n->len);
+}
+
+
+static struct ndp_neighbor* find_neighbor(struct in6_addr *addr, bool strict)
 {
 	time_t now = time(NULL);
 	struct ndp_neighbor *n, *e;
 	list_for_each_entry_safe(n, e, &neighbors, head) {
-		if (IN6_ARE_ADDR_EQUAL(&n->addr, addr))
+		if ((!strict && match_neighbor(n, addr)) ||
+				(n->len == 128 && IN6_ARE_ADDR_EQUAL(&n->addr, addr)))
 			return n;
 
 		if (!n->iface && abs(n->timeout - now) >= 5)
@@ -363,7 +411,7 @@ static void modify_neighbor(struct in6_addr *addr,
 	if (!addr || (void*)addr == (void*)iface)
 		return;
 
-	struct ndp_neighbor *n = find_neighbor(addr);
+	struct ndp_neighbor *n = find_neighbor(addr, true);
 	if (!add) { // Delete action
 		if (n && (!n->iface || n->iface == iface))
 			free_neighbor(n);
@@ -372,6 +420,7 @@ static void modify_neighbor(struct in6_addr *addr,
 				!(n = malloc(sizeof(*n))))
 			return;
 
+		n->len = 128;
 		n->addr = *addr;
 		n->iface = iface;
 		if (!n->iface)

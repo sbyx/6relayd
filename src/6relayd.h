@@ -95,6 +95,8 @@ struct relayd_config {
 	struct relayd_interface *slaves;
 	size_t slavecount;
 
+	char** static_ndp;
+	size_t static_ndp_len;
 };
 
 
@@ -106,6 +108,7 @@ ssize_t relayd_forward_packet(int socket, struct sockaddr_in6 *dest,
 		const struct relayd_interface *iface);
 ssize_t relayd_get_interface_addresses(int ifindex,
 		struct relayd_ipaddr *addrs, size_t cnt);
+struct relayd_interface* relayd_get_interface_by_name(const char *name);
 int relayd_get_interface_mtu(const char *ifname);
 struct relayd_interface* relayd_get_interface_by_index(int ifindex);
 int relayd_sysctl_interface(const char *ifname, const char *option,
