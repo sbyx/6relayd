@@ -41,7 +41,7 @@
 
 static struct relayd_config config;
 
-static int epoll;
+static int epoll, ioctl_sock;
 static size_t epoll_registered = 0;
 static volatile bool do_stop = false;
 
@@ -167,6 +167,8 @@ int main(int argc, char* const argv[])
 		syslog(LOG_ERR, "Unable to open epoll: %s", strerror(errno));
 		return 2;
 	}
+
+	ioctl_sock = socket(AF_INET6, SOCK_DGRAM | SOCK_CLOEXEC, 0);
 
 	if ((rtnl_socket = relayd_open_rtnl_socket()) < 0) {
 		syslog(LOG_ERR, "Unable to open socket: %s", strerror(errno));
@@ -307,7 +309,6 @@ static int open_interface(struct relayd_interface *iface,
 		return 0; // Skipped
 
 	int status = 0;
-	int sock = socket(AF_INET6, SOCK_DGRAM, 0);
 
 	size_t ifname_len = strlen(ifname) + 1;
 	if (ifname_len > IF_NAMESIZE)
@@ -317,13 +318,13 @@ static int open_interface(struct relayd_interface *iface,
 	memcpy(ifr.ifr_name, ifname, ifname_len);
 
 	// Detect interface index
-	if (ioctl(sock, SIOCGIFINDEX, &ifr) < 0)
+	if (ioctl(ioctl_sock, SIOCGIFINDEX, &ifr) < 0)
 		goto err;
 
 	iface->ifindex = ifr.ifr_ifindex;
 
 	// Detect MAC-address of interface
-	if (ioctl(sock, SIOCGIFHWADDR, &ifr) < 0)
+	if (ioctl(ioctl_sock, SIOCGIFHWADDR, &ifr) < 0)
 		goto err;
 
 	// Fill interface structure
@@ -338,7 +339,6 @@ err:
 			ifname, strerror(errno));
 	status = -1;
 out:
-	close(sock);
 	return status;
 }
 
@@ -392,6 +392,18 @@ int relayd_get_interface_mtu(const char *ifname)
 	buf[len] = 0;
 	return atoi(buf);
 
+}
+
+
+// Read IPv6 MAC for interface
+int relayd_get_interface_mac(const char *ifname, uint8_t mac[6])
+{
+	struct ifreq ifr;
+	strncpy(ifr.ifr_name, ifname, sizeof(ifr.ifr_name));
+	if (ioctl(ioctl_sock, SIOCGIFHWADDR, &ifr) < 0)
+		return -1;
+	memcpy(mac, ifr.ifr_hwaddr.sa_data, 6);
+	return 0;
 }
 
 

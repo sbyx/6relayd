@@ -244,7 +244,9 @@ static void handle_solicit(void *addr, void *data, size_t len,
 	inet_ntop(AF_INET6, &req->nd_ns_target, ipbuf, sizeof(ipbuf));
 	syslog(LOG_NOTICE, "Got a NS for %s", ipbuf);
 
-	if (!memcmp(ll->sll_addr, iface->mac, sizeof(iface->mac)) &&
+	uint8_t mac[6];
+	relayd_get_interface_mac(iface->ifname, mac);
+	if (!memcmp(ll->sll_addr, mac, sizeof(mac)) &&
 			ll->sll_pkttype != PACKET_OUTGOING)
 		return; // Looped back
 
@@ -271,7 +273,7 @@ static void handle_solicit(void *addr, void *data, size_t len,
 			.opt_ll_hdr = {ND_OPT_TARGET_LINKADDR, 1},
 		};
 
-		memcpy(advert.mac, iface->mac, sizeof(advert.mac));
+		memcpy(advert.mac, mac, sizeof(advert.mac));
 		advert.body.nd_na_flags_reserved = ND_NA_FLAG_ROUTER |
 				ND_NA_FLAG_SOLICITED;
 

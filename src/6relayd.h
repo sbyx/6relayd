@@ -110,6 +110,7 @@ ssize_t relayd_get_interface_addresses(int ifindex,
 		struct relayd_ipaddr *addrs, size_t cnt);
 struct relayd_interface* relayd_get_interface_by_name(const char *name);
 int relayd_get_interface_mtu(const char *ifname);
+int relayd_get_interface_mac(const char *ifname, uint8_t mac[6]);
 struct relayd_interface* relayd_get_interface_by_index(int ifindex);
 int relayd_sysctl_interface(const char *ifname, const char *option,
 		const char *data);

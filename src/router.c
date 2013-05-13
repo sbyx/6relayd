@@ -226,7 +226,7 @@ static void send_router_advert(struct relayd_event *event)
 		.mtu = {ND_OPT_MTU, 1, 0, htonl(mtu)},
 	};
 	adv.h.nd_ra_flags_reserved = ND_RA_FLAG_OTHER;
-	memcpy(adv.lladdr.data, iface->mac, sizeof(adv.lladdr.data));
+	relayd_get_interface_mac(iface->ifname, adv.lladdr.data);
 
 	// If not currently shutting down
 	struct relayd_ipaddr addrs[RELAYD_MAX_PREFIXES];
