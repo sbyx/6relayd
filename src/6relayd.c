@@ -62,13 +62,12 @@ int main(int argc, char* const argv[])
 	bool daemonize = false;
 	int verbosity = 0;
 	int c;
-	while ((c = getopt(argc, argv, "ASR:D:NFsucn::rt:p:dvh")) != -1) {
+	while ((c = getopt(argc, argv, "ASR:D:Nsucn::rt:p:dvh")) != -1) {
 		switch (c) {
 		case 'A':
 			config.enable_router_discovery_relay = true;
 			config.enable_dhcpv6_relay = true;
 			config.enable_ndp_relay = true;
-			config.enable_forwarding = true;
 			config.send_router_solicitation = true;
 			config.enable_route_learning = true;
 			break;
@@ -98,10 +97,6 @@ int main(int argc, char* const argv[])
 
 		case 'N':
 			config.enable_ndp_relay = true;
-			break;
-
-		case 'F':
-			config.enable_forwarding = true;
 			break;
 
 		case 's':
@@ -206,9 +201,6 @@ int main(int argc, char* const argv[])
 	if (init_ndp_proxy(&config))
 		return 4;
 
-	if (config.enable_forwarding)
-		relayd_sysctl_interface("all", "forwarding", "1");
-
 	if (epoll_registered == 0) {
 		syslog(LOG_WARNING, "No relays enabled or no slave "
 				"interfaces specified. stopped.");
@@ -248,10 +240,6 @@ int main(int argc, char* const argv[])
 
 	syslog(LOG_WARNING, "Termination requested by signal.");
 
-	// Deinitializing
-	if (config.enable_forwarding)
-		relayd_sysctl_interface("all", "forwarding", "0");
-
 	deinit_ndp_proxy();
 	deinit_router_discovery_relay();
 	free(config.slaves);
@@ -266,7 +254,7 @@ static int print_usage(const char *name)
 	"Usage: %s [options] <master> [[~]<slave1> [[~]<slave2> [...]]]\n"
 	"\nNote: to use server features only (no relaying) set master to '.'\n"
 	"\nFeatures:\n"
-	"	-A		Automatic relay (defaults: RrelayDrelayNFsr)\n"
+	"	-A		Automatic relay (defaults: RrelayDrelayNsr)\n"
 	"	-S		Automatic server (defaults: RserverDserver)\n"
 	"	-R <mode>	Enable Router Discovery support (RD)\n"
 	"	   relay	relay mode\n"
@@ -275,7 +263,6 @@ static int print_usage(const char *name)
 	"	   relay	standards-compliant relay\n"
 	"	   server	mini-server for stateless DHCPv6 on slaves\n"
 	"	-N		Enable Neighbor Discovery Proxy (NDP)\n"
-	"	-F		Enable Forwarding for interfaces\n"
 	"\nFeature options:\n"
 	"	-s		Send initial RD-Solicitation to <master>\n"
 	"	-u		RD: Assume default router even with ULA only\n"
@@ -356,21 +343,6 @@ int relayd_open_rtnl_socket(void)
 	}
 
 	return sock;
-}
-
-
-int relayd_sysctl_interface(const char *ifname, const char *option,
-		const char *data)
-{
-	char pathbuf[64];
-	const char *sysctl_pattern = "/proc/sys/net/ipv6/conf/%s/%s";
-	snprintf(pathbuf, sizeof(pathbuf), sysctl_pattern, ifname, option);
-
-	int fd = open(pathbuf, O_WRONLY);
-	int written = write(fd, data, strlen(data));
-	close(fd);
-
-	return (written > 0) ? 0 : -1;
 }
 
 

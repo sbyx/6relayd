@@ -79,7 +79,6 @@ struct relayd_config {
 	// Config
 	bool enable_router_discovery_relay;
 	bool enable_router_discovery_server;
-	bool enable_forwarding;
 	bool enable_dhcpv6_relay;
 	bool enable_dhcpv6_server;
 	bool enable_ndp_relay;
@@ -112,8 +111,6 @@ struct relayd_interface* relayd_get_interface_by_name(const char *name);
 int relayd_get_interface_mtu(const char *ifname);
 int relayd_get_interface_mac(const char *ifname, uint8_t mac[6]);
 struct relayd_interface* relayd_get_interface_by_index(int ifindex);
-int relayd_sysctl_interface(const char *ifname, const char *option,
-		const char *data);
 void relayd_urandom(void *data, size_t len);
 
 
