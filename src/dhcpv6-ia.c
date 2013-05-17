@@ -775,14 +775,12 @@ size_t dhcpv6_handle_ia(uint8_t *buf, size_t buflen, struct relayd_interface *if
 		} else if (hdr->msg_type == DHCPV6_MSG_RENEW ||
 				hdr->msg_type == DHCPV6_MSG_RELEASE ||
 				hdr->msg_type == DHCPV6_MSG_REBIND ||
-				hdr->msg_type == DHCPV6_MSG_DECLINE ||
-				hdr->msg_type == DHCPV6_MSG_CONFIRM) {
+				hdr->msg_type == DHCPV6_MSG_DECLINE) {
 			if (!a && hdr->msg_type != DHCPV6_MSG_REBIND) {
 				status = DHCPV6_STATUS_NOBINDING;
 				ia_response_len = append_reply(buf, buflen, status, ia, a, iface, false);
 			} else if (hdr->msg_type == DHCPV6_MSG_RENEW ||
-					hdr->msg_type == DHCPV6_MSG_REBIND ||
-					hdr->msg_type == DHCPV6_MSG_CONFIRM) {
+					hdr->msg_type == DHCPV6_MSG_REBIND) {
 				ia_response_len = append_reply(buf, buflen, status, ia, a, iface, false);
 			} else if (hdr->msg_type == DHCPV6_MSG_RELEASE) {
 				a->valid_until = 0;
@@ -792,6 +790,10 @@ size_t dhcpv6_handle_ia(uint8_t *buf, size_t buflen, struct relayd_interface *if
 				a->valid_until = now + 3600; // Block address for 1h
 				update_state = true;
 			}
+		} else if (hdr->msg_type == DHCPV6_MSG_CONFIRM) {
+			// Always send NOTONLINK for CONFIRM so that clients restart connection
+			status = DHCPV6_STATUS_NOTONLINK;
+			ia_response_len = append_reply(buf, buflen, status, ia, a, iface, true);
 		}
 
 		buf += ia_response_len;
