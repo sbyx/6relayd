@@ -488,10 +488,20 @@ static size_t append_reply(uint8_t *buf, size_t buflen, uint16_t status,
 		if (a) {
 			uint32_t pref = 86400;
 			uint32_t valid = 86400;
+			bool have_non_ula = false;
+			for (size_t i = 0; i < iface->pd_addr_len; ++i)
+				if ((iface->pd_addr[i].addr.s6_addr[0] & 0xfe) != 0xfc)
+					have_non_ula = true;
 
 			for (size_t i = 0; i < iface->pd_addr_len; ++i) {
 				uint32_t prefix_pref = iface->pd_addr[i].preferred - now;
 				uint32_t prefix_valid = iface->pd_addr[i].valid - now;
+
+				// ULA-deprecation compatibility workaround
+				if ((iface->pd_addr[i].addr.s6_addr[0] & 0xfe) == 0xfc &&
+						a->length == 128 && have_non_ula &&
+						config->deprecate_ula_if_public_avail)
+					prefix_pref = 0;
 
 				if (prefix_pref > 86400)
 					prefix_pref = 86400;
