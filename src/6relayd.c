@@ -33,6 +33,7 @@
 #include <sys/ioctl.h>
 #include <sys/epoll.h>
 #include <sys/types.h>
+#include <sys/wait.h>
 
 #include <fcntl.h>
 
@@ -51,6 +52,7 @@ static int urandom_fd = -1;
 
 static int print_usage(const char *name);
 static void set_stop(_unused int signal);
+static void wait_child(_unused int signal);
 static int open_interface(struct relayd_interface *iface,
 		const char *ifname, bool external);
 static void relayd_receive_packets(struct relayd_event *event);
@@ -62,7 +64,7 @@ int main(int argc, char* const argv[])
 	bool daemonize = false;
 	int verbosity = 0;
 	int c;
-	while ((c = getopt(argc, argv, "ASR:D:Nsucn::rt:p:dvh")) != -1) {
+	while ((c = getopt(argc, argv, "ASR:D:Nsucn::l:a:rt:m:p:dvh")) != -1) {
 		switch (c) {
 		case 'A':
 			config.enable_router_discovery_relay = true;
@@ -117,6 +119,18 @@ int main(int argc, char* const argv[])
 				inet_pton(AF_INET6, optarg, &config.dnsaddr);
 			break;
 
+		case 'l':
+			config.dhcpv6_statefile = strtok(optarg, ",");
+			if (config.dhcpv6_statefile)
+				config.dhcpv6_cb = strtok(NULL, ",");
+			break;
+
+		case 'a':
+			config.dhcpv6_lease = realloc(config.dhcpv6_lease,
+					sizeof(char*) * ++config.dhcpv6_lease_len);
+			config.dhcpv6_lease[config.dhcpv6_lease_len - 1] = optarg;
+			break;
+
 		case 'r':
 			config.enable_route_learning = true;
 			break;
@@ -125,6 +139,10 @@ int main(int argc, char* const argv[])
 			config.static_ndp = realloc(config.static_ndp,
 					sizeof(char*) * ++config.static_ndp_len);
 			config.static_ndp[config.static_ndp_len - 1] = optarg;
+			break;
+
+		case 'm':
+			config.ra_managed_mode = atoi(optarg);
 			break;
 
 		case 'p':
@@ -224,6 +242,7 @@ int main(int argc, char* const argv[])
 	signal(SIGTERM, set_stop);
 	signal(SIGHUP, set_stop);
 	signal(SIGINT, set_stop);
+	signal(SIGCHLD, wait_child);
 
 	// Main loop
 	while (!do_stop) {
@@ -267,7 +286,13 @@ static int print_usage(const char *name)
 	"	-s		Send initial RD-Solicitation to <master>\n"
 	"	-u		RD: Assume default router even with ULA only\n"
 	"	-c		RD: ULA-compatibility with broken devices\n"
+	"	-m <mode>	RD: Address Management Level\n"
+	"	   0 (default)	enable SLAAC and don't send Managed-Flag\n"
+	"	   1		enable SLAAC and send Managed-Flag\n"
+	"	   2		disable SLAAC and send Managed-Flag\n"
 	"	-n		RD/DHCPv6: always rewrite name server\n"
+	"	-l <file>,<cmd>	DHCPv6: IA lease-file and update callback\n"
+	"	-a <duid>:<val>	DHCPv6: IA_NA static assignment\n"
 	"	-r		NDP: learn routes to neighbors\n"
 	"	-t <p>/<l>:<if>	NDP: define a static NDP-prefix on <if>\n"
 	"	slave prefix ~	NDP: don't proxy NDP for hosts and only\n"
@@ -279,6 +304,12 @@ static int print_usage(const char *name)
 	"	-h		Show this help\n\n",
 	name);
 	return 1;
+}
+
+
+static void wait_child(_unused int signal)
+{
+	while (waitpid(-1, NULL, WNOHANG) > 0);
 }
 
 

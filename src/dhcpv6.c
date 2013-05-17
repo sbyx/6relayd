@@ -54,7 +54,7 @@ int init_dhcpv6_relay(const struct relayd_config *relayd_config)
 		return -1;
 	}
 
-	dhcpv6_init_pd(relayd_config, dhcpv6_event.socket);
+	dhcpv6_init_ia(relayd_config, dhcpv6_event.socket);
 
 
 	// Configure multicast settings
@@ -236,12 +236,8 @@ static void handle_client_request(void *addr, void *data, size_t len,
 	if (opts[-4] == DHCPV6_MSG_SOLICIT) {
 		dest.msg_type = DHCPV6_MSG_ADVERTISE;
 	} else if (opts[-4] == DHCPV6_MSG_INFORMATION_REQUEST) {
-		iov[2].iov_base = &refresh;
-		iov[2].iov_len = sizeof(refresh);
-	} else if (opts[-4] == DHCPV6_MSG_RELEASE) {
-		iov[2].iov_base = &stat;
-		iov[2].iov_len = sizeof(stat);
-		stat.value = 0;
+		iov[4].iov_base = &refresh;
+		iov[4].iov_len = sizeof(refresh);
 	}
 
 	// Go through options and find what we need
@@ -256,15 +252,14 @@ static void handle_client_request(void *addr, void *data, size_t len,
 			if (olen != ntohs(dest.serverid_length) ||
 					memcmp(odata, &dest.duid_type, olen))
 				return; // Not for us
-		} else if (otype == DHCPV6_OPT_IA_NA && opts[-4] != DHCPV6_MSG_RELEASE) {
-			iov[2].iov_base = &stat;
-			iov[2].iov_len = sizeof(stat);
 		}
 	}
 
-	iov[4].iov_len = dhcpv6_handle_pd(pdbuf, sizeof(pdbuf), iface, addr, &opts[-4], opts_end);
-	if (iov[4].iov_len == 0 && opts[-4] == DHCPV6_MSG_REBIND)
-		return;
+	if (opts[-4] != DHCPV6_MSG_INFORMATION_REQUEST) {
+		iov[4].iov_len = dhcpv6_handle_ia(pdbuf, sizeof(pdbuf), iface, addr, &opts[-4], opts_end);
+		if (iov[4].iov_len == 0 && opts[-4] == DHCPV6_MSG_REBIND)
+			return;
+	}
 
 	if (iov[0].iov_len > 0) // Update length
 		update_nested_message(data, len, iov[1].iov_len +

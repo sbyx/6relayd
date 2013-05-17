@@ -25,10 +25,12 @@
 #define DHCPV6_MSG_SOLICIT 1
 #define DHCPV6_MSG_ADVERTISE 2
 #define DHCPV6_MSG_REQUEST 3
+#define DHCPV6_MSG_CONFIRM 4
 #define DHCPV6_MSG_RENEW 5
 #define DHCPV6_MSG_REBIND 6
 #define DHCPV6_MSG_REPLY 7
 #define DHCPV6_MSG_RELEASE 8
+#define DHCPV6_MSG_DECLINE 9
 #define DHCPV6_MSG_RECONFIGURE 10
 #define DHCPV6_MSG_INFORMATION_REQUEST 11
 #define DHCPV6_MSG_RELAY_FORW 12
@@ -37,6 +39,7 @@
 #define DHCPV6_OPT_CLIENTID 1
 #define DHCPV6_OPT_SERVERID 2
 #define DHCPV6_OPT_IA_NA 3
+#define DHCPV6_OPT_IA_ADDR 5
 #define DHCPV6_OPT_STATUS 13
 #define DHCPV6_OPT_RELAY_MSG 9
 #define DHCPV6_OPT_AUTH 11
@@ -48,6 +51,7 @@
 #define DHCPV6_OPT_IA_PD 25
 #define DHCPV6_OPT_IA_PREFIX 26
 #define DHCPV6_OPT_INFO_REFRESH 32
+#define DHCPV6_OPT_FQDN 39
 
 #define DHCPV6_DUID_VENDOR 2
 
@@ -116,6 +120,14 @@ struct dhcpv6_ia_prefix {
 	struct in6_addr addr;
 } _packed;
 
+struct dhcpv6_ia_addr {
+	uint16_t type;
+	uint16_t len;
+	struct in6_addr addr;
+	uint32_t preferred;
+	uint32_t valid;
+} _packed;
+
 
 
 
@@ -125,6 +137,6 @@ struct dhcpv6_ia_prefix {
 		((olen) = _o[2] << 8 | _o[3]) + (odata) <= (end); \
 		_o += 4 + (_o[2] << 8 | _o[3]))
 
-int dhcpv6_init_pd(const struct relayd_config *relayd_config, int socket);
-size_t dhcpv6_handle_pd(uint8_t *buf, size_t buflen, struct relayd_interface *iface,
+int dhcpv6_init_ia(const struct relayd_config *relayd_config, int socket);
+size_t dhcpv6_handle_ia(uint8_t *buf, size_t buflen, struct relayd_interface *iface,
 		const struct sockaddr_in6 *addr, const void *data, const uint8_t *end);

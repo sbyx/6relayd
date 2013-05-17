@@ -5,10 +5,10 @@ cmake_policy(SET CMP0015 NEW)
 project(6relayd C)
 
 set(CMAKE_SHARED_LIBRARY_LINK_C_FLAGS "")
-set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -g -std=c99")
+set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -g -std=c99 -Os -s")
 add_definitions(-D_GNU_SOURCE -Wall -Werror -Wextra -Wno-extended-offsetof -pedantic)
 
-add_executable(6relayd src/6relayd.c src/router.c src/dhcpv6.c src/ndp.c src/md5.c src/dhcpv6-pd.c)
+add_executable(6relayd src/6relayd.c src/router.c src/dhcpv6.c src/ndp.c src/md5.c src/dhcpv6-ia.c)
 target_link_libraries(6relayd resolv)
 
 # Installation

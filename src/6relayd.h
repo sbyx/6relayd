@@ -74,6 +74,8 @@ struct relayd_interface {
 	bool pd_reconf;
 };
 
+#define RELAYD_MANAGED_MFLAG	1
+#define RELAYD_MANAGED_NO_AFLAG	2
 
 struct relayd_config {
 	// Config
@@ -88,11 +90,17 @@ struct relayd_config {
 	bool always_rewrite_dns;
 	bool always_announce_default_router;
 	bool deprecate_ula_if_public_avail;
+	int ra_managed_mode;
 
 	struct in6_addr dnsaddr;
 	struct relayd_interface master;
 	struct relayd_interface *slaves;
 	size_t slavecount;
+
+	char *dhcpv6_cb;
+	char *dhcpv6_statefile;
+	char** dhcpv6_lease;
+	size_t dhcpv6_lease_len;
 
 	char** static_ndp;
 	size_t static_ndp_len;

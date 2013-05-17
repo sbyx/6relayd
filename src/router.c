@@ -226,6 +226,8 @@ static void send_router_advert(struct relayd_event *event)
 		.mtu = {ND_OPT_MTU, 1, 0, htonl(mtu)},
 	};
 	adv.h.nd_ra_flags_reserved = ND_RA_FLAG_OTHER;
+	if (config->ra_managed_mode >= RELAYD_MANAGED_MFLAG)
+		adv.h.nd_ra_flags_reserved |= ND_RA_FLAG_MANAGED;
 	relayd_get_interface_mac(iface->ifname, adv.lladdr.data);
 
 	// If not currently shutting down
@@ -281,8 +283,9 @@ static void send_router_advert(struct relayd_event *event)
 		p->nd_opt_pi_type = ND_OPT_PREFIX_INFORMATION;
 		p->nd_opt_pi_len = 4;
 		p->nd_opt_pi_prefix_len = 64;
-		p->nd_opt_pi_flags_reserved = ND_OPT_PI_FLAG_ONLINK |
-				ND_OPT_PI_FLAG_AUTO;
+		p->nd_opt_pi_flags_reserved = ND_OPT_PI_FLAG_ONLINK;
+		if (config->ra_managed_mode < RELAYD_MANAGED_NO_AFLAG)
+			p->nd_opt_pi_flags_reserved |= ND_OPT_PI_FLAG_AUTO;
 		p->nd_opt_pi_valid_time = htonl(addr->valid);
 		p->nd_opt_pi_preferred_time = htonl(addr->preferred);
 

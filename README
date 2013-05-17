@@ -5,11 +5,11 @@
 6relayd is a daemon for serving and relaying IPv6 management protocols to
 configure clients and downstream routers.
 
-6relayd provides server services for RA, stateless DHCPv6, DHCPv6-PD and can
-be used to relay RA, DHCPv6 and NDP between routed (non-bridged) interfaces
-in case no delegated prefixes are provided by the upstream router.
+6relayd provides server services for RA, stateless and stateful DHCPv6,
+prefix delegation and can be used to relay RA, DHCPv6 and NDP between routed
+(non-bridged) interfaces in case no delegated prefixes are available.
 
-It is optimized for embedded Linux routers and compiles to only about 35 KB.
+It is optimized for embedded Linux routers and compiles to <40 KB.
 
 
 ** Features **
@@ -21,7 +21,11 @@ It is optimized for embedded Linux routers and compiles to only about 35 KB.
    b) support for automatically picking up announced prefixes in server mode
    
 3. DHCPv6-support with 2 modes of operation
-   server:	minimalistic server for stateless DHCPv6 + DHCPv6-PD
+   server:	minimalistic server mode
+   a) stateless and stateful address assignment
+   b) prefix delegation support
+   c) dynamic reconfiguration support
+
    relay: 	mostly standards-compliant DHCPv6-relay
    a) support for rewriting announced DNS-server addresses
    
