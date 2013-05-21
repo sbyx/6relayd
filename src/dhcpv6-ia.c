@@ -41,6 +41,7 @@ struct assignment {
 	uint32_t assigned;
 	uint32_t iaid;
 	uint8_t length; // length == 128 -> IA_NA, length <= 64 -> IA_PD
+	bool accept_reconf;
 	uint8_t clid_len;
 	uint8_t clid_data[];
 };
@@ -391,7 +392,7 @@ static void update(struct relayd_interface *iface)
 		struct list_head reassign = LIST_HEAD_INIT(reassign);
 		struct assignment *c, *d;
 		list_for_each_entry_safe(c, d, &iface->pd_assignments, head) {
-			if (c->clid_len == 0 || c->valid_until < now)
+			if (c->clid_len == 0 || c->valid_until < now || !c->accept_reconf)
 				continue;
 
 			if (c->length < 128 && c->assigned >= border->assigned && c != border)
@@ -405,7 +406,7 @@ static void update(struct relayd_interface *iface)
 				// Leave all other assignments of that client alone
 				struct assignment *a;
 				list_for_each_entry(a, &iface->pd_assignments, head)
-					if (a->clid_len == c->clid_len &&
+					if (a != c && a->clid_len == c->clid_len &&
 							!memcmp(a->clid_data, c->clid_data, a->clid_len))
 						c->reconf_cnt = INT_MAX;
 			}
@@ -635,6 +636,7 @@ size_t dhcpv6_handle_ia(uint8_t *buf, size_t buflen, struct relayd_interface *if
 	uint16_t otype, olen;
 
 	// Find and parse client-id and hostname
+	bool accept_reconf = false;
 	uint8_t *clid_data = NULL, clid_len = 0;
 	char hostname[256];
 	size_t hostname_len = 0;
@@ -642,9 +644,15 @@ size_t dhcpv6_handle_ia(uint8_t *buf, size_t buflen, struct relayd_interface *if
 		if (otype == DHCPV6_OPT_CLIENTID) {
 			clid_data = odata;
 			clid_len = olen;
-		} else if (otype == DHCPV6_OPT_FQDN && olen >= 2) {
-			if (dn_expand(&odata[1], &odata[olen], &odata[1], hostname, sizeof(hostname)) > 0)
+		} else if (otype == DHCPV6_OPT_FQDN && olen >= 2 && olen <= 255) {
+			uint8_t fqdn_buf[256];
+			memcpy(fqdn_buf, odata, olen);
+			fqdn_buf[olen++] = 0;
+
+			if (dn_expand(&fqdn_buf[1], &fqdn_buf[olen], &fqdn_buf[1], hostname, sizeof(hostname)) > 0)
 				hostname_len = strcspn(hostname, ".");
+		} else if (otype == DHCPV6_OPT_RECONF_ACCEPT) {
+			accept_reconf = true;
 		}
 	}
 
@@ -767,6 +775,7 @@ size_t dhcpv6_handle_ia(uint8_t *buf, size_t buflen, struct relayd_interface *if
 					memcpy(a->hostname, hostname, hostname_len);
 					a->hostname[hostname_len] = 0;
 				}
+				a->accept_reconf = accept_reconf;
 				update_state = true;
 			} else if (!assigned && a) { // Cleanup failed assignment
 				free(a->hostname);
