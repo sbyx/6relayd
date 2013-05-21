@@ -59,10 +59,17 @@ int init_dhcpv6_relay(const struct relayd_config *relayd_config)
 
 	// Configure multicast settings
 	struct ipv6_mreq mreq = {ALL_DHCPV6_RELAYS, 0};
+	struct ipv6_mreq mreq2 = {ALL_DHCPV6_SERVERS, 0};
 	for (size_t i = 0; i < config->slavecount; ++i) {
 		mreq.ipv6mr_interface = config->slaves[i].ifindex;
 		setsockopt(dhcpv6_event.socket, IPPROTO_IPV6,
 				IPV6_ADD_MEMBERSHIP, &mreq, sizeof(mreq));
+
+		if (config->enable_dhcpv6_server) {
+			mreq2.ipv6mr_interface = config->slaves[i].ifindex;
+			setsockopt(dhcpv6_event.socket, IPPROTO_IPV6,
+					IPV6_ADD_MEMBERSHIP, &mreq2, sizeof(mreq2));
+		}
 	}
 
 	if (config->enable_dhcpv6_server)
@@ -187,7 +194,6 @@ static void handle_client_request(void *addr, void *data, size_t len,
 		.clientid_type = htons(DHCPV6_OPT_CLIENTID),
 		.clientid_buf = {0}
 	};
-	memcpy(dest.tr_id, hdr->transaction_id, sizeof(dest.tr_id));
 	memcpy(dest.mac, iface->mac, sizeof(dest.mac));
 
 	struct __attribute__((packed)) {
@@ -237,6 +243,12 @@ static void handle_client_request(void *addr, void *data, size_t len,
 	uint8_t *opts = (uint8_t*)&hdr[1], *opts_end = (uint8_t*)data + len;
 	if (hdr->msg_type == DHCPV6_MSG_RELAY_FORW)
 		handle_nested_message(data, len, &opts, &opts_end, iov);
+
+	memcpy(dest.tr_id, &opts[-3], sizeof(dest.tr_id));
+
+	if (opts[-4] == DHCPV6_MSG_ADVERTISE || opts[-4] == DHCPV6_MSG_REPLY || opts[-4] == DHCPV6_MSG_RELAY_REPL)
+		return;
+
 	if (opts[-4] == DHCPV6_MSG_SOLICIT) {
 		dest.msg_type = DHCPV6_MSG_ADVERTISE;
 	} else if (opts[-4] == DHCPV6_MSG_INFORMATION_REQUEST) {
@@ -324,13 +336,9 @@ static void relay_server_response(uint8_t *data, size_t len)
 		}
 	}
 
-
-	struct relayd_interface *iface = NULL;
-	for (size_t i = 0; !iface && i < config->slavecount; ++i)
-		if (config->slaves[i].ifindex == ifaceidx)
-			iface = &config->slaves[i];
 	// Invalid interface-id or basic payload
-	if (!iface || !payload_data || payload_len < 4)
+	struct relayd_interface *iface = relayd_get_interface_by_index(ifaceidx);
+	if (!iface || iface == &config->master || !payload_data || payload_len < 4)
 		return;
 
 	bool is_authenticated = false;
