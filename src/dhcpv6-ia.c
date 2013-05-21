@@ -79,9 +79,10 @@ int dhcpv6_init_ia(const struct relayd_config *relayd_config, int dhcpv6_socket)
 		struct assignment *border = calloc(1, sizeof(*border));
 		border->length = 64;
 		list_add(&border->head, &iface->pd_assignments);
-
-		update(iface);
 	}
+
+	for (size_t i = 0; i < config->slavecount; ++i)
+		update(&config->slaves[i]);
 
 	// Parse static entries
 	for (size_t i = 0; i < config->dhcpv6_lease_len; ++i) {
