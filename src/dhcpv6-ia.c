@@ -487,8 +487,8 @@ static size_t append_reply(uint8_t *buf, size_t buflen, uint16_t status,
 		datalen += sizeof(stat);
 	} else {
 		if (a) {
-			uint32_t pref = 86400;
-			uint32_t valid = 86400;
+			uint32_t pref = 3600;
+			uint32_t valid = 3600;
 			bool have_non_ula = false;
 			for (size_t i = 0; i < iface->pd_addr_len; ++i)
 				if ((iface->pd_addr[i].addr.s6_addr[0] & 0xfe) != 0xfc)
@@ -543,16 +543,25 @@ static size_t append_reply(uint8_t *buf, size_t buflen, uint16_t status,
 					datalen += sizeof(n);
 				}
 
-				if (prefix_pref < pref && prefix_pref > 7200)
-					pref = prefix_pref;
+				// Calculate T1 / T2 based on non-deprecated addresses
+				if (prefix_pref > 0) {
+					if (prefix_pref < pref)
+						pref = prefix_pref;
 
-				if (prefix_valid < valid && prefix_valid > 7200)
-					valid = prefix_valid;
+					if (prefix_valid < valid)
+						valid = prefix_valid;
+				}
 			}
 
 			a->valid_until = valid;
 			out.t1 = htonl(pref * 5 / 10);
 			out.t2 = htonl(pref * 8 / 10);
+
+			if (!out.t1)
+				out.t1 = htonl(1);
+
+			if (!out.t2)
+				out.t2 = htonl(1);
 		}
 
 		if (!request) {
@@ -734,7 +743,7 @@ size_t dhcpv6_handle_ia(uint8_t *buf, size_t buflen, struct relayd_interface *if
 					assigned = assign_na(iface, a);
 			}
 
-			if (!assigned) { // Set error status
+			if (!assigned || iface->pd_addr_len == 0) { // Set error status
 				status = (is_pd) ? DHCPV6_STATUS_NOPREFIXAVAIL : DHCPV6_STATUS_NOADDRSAVAIL;
 			} else if (assigned && !first) { //
 				size_t handshake_len = 4;

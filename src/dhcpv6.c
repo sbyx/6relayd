@@ -104,8 +104,10 @@ static void handle_nested_message(uint8_t *data, size_t len,
 		uint8_t **opts, uint8_t **end, struct iovec iov[5])
 {
 	struct dhcpv6_relay_header *hdr = (struct dhcpv6_relay_header*)data;
-	if (iov[0].iov_base == NULL)
+	if (iov[0].iov_base == NULL) {
 		iov[0].iov_base = data;
+		iov[0].iov_len = len;
+	}
 
 	if (len < sizeof(struct dhcpv6_client_header))
 		return;
@@ -123,7 +125,8 @@ static void handle_nested_message(uint8_t *data, size_t len,
 	dhcpv6_for_each_option(hdr->options, data + len, otype, olen, odata) {
 		if (otype == DHCPV6_OPT_RELAY_MSG) {
 			iov[5].iov_base = odata + olen;
-			iov[5].iov_len = (data + len) - (odata + olen);
+			iov[5].iov_len = (((uint8_t*)iov[0].iov_base) + iov[0].iov_len)
+					- (odata + olen);
 			handle_nested_message(odata, olen, opts, end, iov);
 			return;
 		}
@@ -167,9 +170,6 @@ static void handle_client_request(void *addr, void *data, size_t len,
 	struct __attribute__((packed)) {
 		uint8_t msg_type;
 		uint8_t tr_id[3];
-		uint16_t dns_type;
-		uint16_t dns_length;
-		struct in6_addr addr;
 		uint16_t serverid_type;
 		uint16_t serverid_length;
 		uint16_t duid_type;
@@ -180,8 +180,6 @@ static void handle_client_request(void *addr, void *data, size_t len,
 		uint8_t clientid_buf[130];
 	} dest = {
 		.msg_type = DHCPV6_MSG_REPLY,
-		.dns_type = htons(DHCPV6_OPT_DNS_SERVERS),
-		.dns_length = htons(sizeof(struct in6_addr)),
 		.serverid_type = htons(DHCPV6_OPT_SERVERID),
 		.serverid_length = htons(10),
 		.duid_type = htons(3),
@@ -213,6 +211,12 @@ static void handle_client_request(void *addr, void *data, size_t len,
 	} domain = {htons(DHCPV6_OPT_DNS_DOMAIN), 0, {0}};
 	size_t domain_len = 0;
 
+	struct __attribute__((packed)) {
+		uint16_t dns_type;
+		uint16_t dns_length;
+		struct in6_addr addr;
+	} dnsaddr = {htons(DHCPV6_OPT_DNS_SERVERS), htons(sizeof(struct in6_addr)), IN6ADDR_ANY_INIT};
+
 	res_init();
 	const char *search = _res.dnsrch[0];
 	if (search && search[0]) {
@@ -227,7 +231,7 @@ static void handle_client_request(void *addr, void *data, size_t len,
 
 	uint8_t pdbuf[512];
 	struct iovec iov[] = {{NULL, 0}, {&dest, (uint8_t*)&dest.clientid_type
-			- (uint8_t*)&dest}, {NULL, 0}, {&domain, domain_len},
+			- (uint8_t*)&dest}, {&dnsaddr, 0}, {&domain, domain_len},
 			{pdbuf, 0}, {NULL, 0}};
 
 	uint8_t *opts = (uint8_t*)&hdr[1], *opts_end = (uint8_t*)data + len;
@@ -261,15 +265,16 @@ static void handle_client_request(void *addr, void *data, size_t len,
 			return;
 	}
 
-	if (iov[0].iov_len > 0) // Update length
-		update_nested_message(data, len, iov[1].iov_len +
-				iov[2].iov_len - (4 + opts_end - opts));
-
 	struct relayd_ipaddr ipaddr;
-	if (relayd_get_interface_addresses(iface->ifindex, &ipaddr, 1) != 1)
-		return; // Failed to detect a local address
+	if (relayd_get_interface_addresses(iface->ifindex, &ipaddr, 1) == 1) {
+		dnsaddr.addr = ipaddr.addr;
+		iov[2].iov_len = sizeof(dnsaddr);
+	}
 
-	dest.addr = ipaddr.addr;
+	if (iov[0].iov_len > 0) // Update length
+		update_nested_message(data, len, iov[1].iov_len + iov[2].iov_len +
+				iov[3].iov_len + iov[4].iov_len - (4 + opts_end - opts));
+
 	relayd_forward_packet(dhcpv6_event.socket, addr, iov, 5, iface);
 }
 
