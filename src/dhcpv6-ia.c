@@ -554,7 +554,7 @@ static size_t append_reply(uint8_t *buf, size_t buflen, uint16_t status,
 				}
 			}
 
-			a->valid_until = valid;
+			a->valid_until = valid + now;
 			out.t1 = htonl(pref * 5 / 10);
 			out.t2 = htonl(pref * 8 / 10);
 
