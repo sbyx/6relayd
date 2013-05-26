@@ -249,6 +249,9 @@ static void write_statefile(void)
 
 				struct in6_addr addr;
 				for (size_t i = 0; i < iface->pd_addr_len; ++i) {
+					if (iface->pd_addr[i].prefix > 64)
+						continue;
+
 					addr = iface->pd_addr[i].addr;
 					if (c->length == 128)
 						addr.s6_addr32[3] = htonl(c->assigned);
@@ -499,6 +502,9 @@ static size_t append_reply(uint8_t *buf, size_t buflen, uint16_t status,
 				uint32_t prefix_pref = iface->pd_addr[i].preferred - now;
 				uint32_t prefix_valid = iface->pd_addr[i].valid - now;
 
+				if (iface->pd_addr[i].prefix > 64)
+					continue;
+
 				// ULA-deprecation compatibility workaround
 				if ((iface->pd_addr[i].addr.s6_addr[0] & 0xfe) == 0xfc &&
 						a->length == 128 && have_non_ula &&
@@ -578,6 +584,9 @@ static size_t append_reply(uint8_t *buf, size_t buflen, uint16_t status,
 				bool found = false;
 				if (a) {
 					for (size_t i = 0; i < iface->pd_addr_len; ++i) {
+						if (iface->pd_addr[i].prefix > 64)
+							continue;
+
 						struct in6_addr addr = iface->pd_addr[i].addr;
 						if (ia->type == htons(DHCPV6_OPT_IA_PD)) {
 							addr.s6_addr32[1] |= htonl(a->assigned);
