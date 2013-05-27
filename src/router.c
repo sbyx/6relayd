@@ -21,6 +21,7 @@
 #include <unistd.h>
 #include <stdbool.h>
 #include <sys/timerfd.h>
+#include <net/route.h>
 
 #include "list.h"
 #include "router.h"
@@ -39,6 +40,7 @@ static void sigusr1_refresh(int signal);
 
 static struct relayd_event router_discovery_event = {-1, NULL, handle_icmpv6};
 
+static FILE *fp_route = NULL;
 static const struct relayd_config *config = NULL;
 static bool in_shutdown = false;
 
@@ -60,6 +62,12 @@ int init_router_discovery_relay(const struct relayd_config *relayd_config)
 
 	if (router_discovery_event.socket < 0) {
 		syslog(LOG_ERR, "Failed to open RAW-socket: %s",
+				strerror(errno));
+		return -1;
+	}
+
+	if (!(fp_route = fopen("/proc/net/ipv6_route", "r"))) {
+		syslog(LOG_ERR, "Failed to open routing table: %s",
 				strerror(errno));
 		return -1;
 	}
@@ -176,27 +184,54 @@ static void handle_icmpv6(_unused void *addr, void *data, size_t len,
 }
 
 
-// Detect whether a default route exists
-static bool have_default_route(void)
+static bool match_route(const struct relayd_ipaddr *n, const struct in6_addr *addr)
 {
-	FILE *fp = fopen("/proc/net/ipv6_route", "r");
-	if (!fp)
+	if (n->prefix <= 32)
+		return ntohl(n->addr.s6_addr32[0]) >> (32 - n->prefix) ==
+				ntohl(addr->s6_addr32[0]) >> (32 - n->prefix);
+
+	if (n->addr.s6_addr32[0] != addr->s6_addr32[0])
 		return false;
 
+	return ntohl(n->addr.s6_addr32[1]) >> (64 - n->prefix) ==
+			ntohl(addr->s6_addr32[1]) >> (64 - n->prefix);
+}
+
+
+// Detect whether a default route exists, also find the source prefixes
+static bool parse_routes(struct relayd_ipaddr *n, ssize_t len)
+{
+	rewind(fp_route);
+
 	char line[512], ifname[16];
-	bool found = false;
-	while (fgets(line, sizeof(line), fp)) {
+	bool found_default = false;
+	struct relayd_ipaddr p = {IN6ADDR_ANY_INIT, 0, 0, 0};
+	while (fgets(line, sizeof(line), fp_route)) {
+		uint32_t rflags;
 		if (sscanf(line, "00000000000000000000000000000000 00 "
-				"00000000000000000000000000000000 00 "
-				"%*s %*s %*s %*s %*s %15s", ifname) &&
+				"%*s %*s %*s %*s %*s %*s %*s %15s", ifname) &&
 				strcmp(ifname, "lo")) {
-			found = true;
-			break;
+			found_default = true;
+		} else if (sscanf(line, "%8" SCNx32 "%8" SCNx32 "%*8" SCNx32 "%*8" SCNx32 " %hhx %*s "
+				"%*s 00000000000000000000000000000000 %*s %*s %*s %" SCNx32 " lo",
+				&p.addr.s6_addr32[0], &p.addr.s6_addr32[1], &p.prefix, &rflags) &&
+				p.prefix > 0 && (rflags & RTF_NONEXTHOP) && (rflags & RTF_REJECT)) {
+			// Find source prefixes by scanning through unreachable-routes
+			p.addr.s6_addr32[0] = htonl(p.addr.s6_addr32[0]);
+			p.addr.s6_addr32[1] = htonl(p.addr.s6_addr32[1]);
+
+			for (ssize_t i = 0; i < len; ++i) {
+				if (n[i].prefix <= 64 && n[i].prefix >= p.prefix &&
+						match_route(&p, &n[i].addr)) {
+					n[i].prefix = p.prefix;
+					break;
+				}
+			}
+
 		}
 	}
 
-	fclose(fp);
-	return found;
+	return found_default;
 }
 
 
@@ -235,12 +270,12 @@ static void send_router_advert(struct relayd_event *event)
 	ssize_t ipcnt = 0;
 
 	if (!in_shutdown) {
-		if (have_default_route())
-			adv.h.nd_ra_router_lifetime =
-					htons(3 * MaxRtrAdvInterval);
-
 		ipcnt = relayd_get_interface_addresses(iface->ifindex,
 				addrs, ARRAY_SIZE(addrs));
+
+		if (parse_routes(addrs, ipcnt)) // Have default route
+			adv.h.nd_ra_router_lifetime =
+					htons(3 * MaxRtrAdvInterval);
 	}
 
 
@@ -346,12 +381,45 @@ static void send_router_advert(struct relayd_event *event)
 
 	}
 
+	size_t routes_cnt = 0;
+	struct {
+		uint8_t type;
+		uint8_t len;
+		uint8_t prefix;
+		uint8_t flags;
+		uint32_t lifetime;
+		uint32_t addr[2];
+	} routes[RELAYD_MAX_PREFIXES];
+
+	for (ssize_t i = 0; i < ipcnt; ++i) {
+		struct relayd_ipaddr *addr = &addrs[i];
+		if (addr->prefix > 64 || addr->prefix == 0) {
+			continue; // Address not suitable
+		} else if (addr->prefix > 32) {
+			addr->addr.s6_addr32[1] &= htonl(~((1U << (64 - addr->prefix)) - 1));
+		} else if (addr->prefix <= 32) {
+			addr->addr.s6_addr32[0] &= htonl(~((1U << (32 - addr->prefix)) - 1));
+			addr->addr.s6_addr32[1] = 0;
+		}
+
+		routes[routes_cnt].type = ND_OPT_ROUTE_INFO;
+		routes[routes_cnt].len = sizeof(*routes) / 8;
+		routes[routes_cnt].prefix = addr->prefix;
+		routes[routes_cnt].flags = 0;
+		routes[routes_cnt].lifetime = htonl(addr->valid);
+		routes[routes_cnt].addr[0] = addr->addr.s6_addr32[0];
+		routes[routes_cnt].addr[1] = addr->addr.s6_addr32[1];
+
+		++routes_cnt;
+	}
+
 
 	struct iovec iov[] = {{&adv, (uint8_t*)&adv.prefix[cnt] - (uint8_t*)&adv},
+			{&routes, routes_cnt * sizeof(*routes)},
 			{&dns, dnslen}, {&domain, domain_len}};
 	struct sockaddr_in6 all_nodes = {AF_INET6, 0, 0, ALL_IPV6_NODES, 0};
 	relayd_forward_packet(router_discovery_event.socket,
-			&all_nodes, iov, 3, iface);
+			&all_nodes, iov, 4, iface);
 
 	// Rearm timer
 	struct itimerspec val = {{0,0}, {0,0}};

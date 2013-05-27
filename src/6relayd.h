@@ -24,6 +24,7 @@
 #define ARRAY_SIZE(arr) (sizeof(arr) / sizeof((arr)[0]))
 
 // RFC 6106 defines this router advertisement option
+#define ND_OPT_ROUTE_INFO 24
 #define ND_OPT_RECURSIVE_DNS 25
 #define ND_OPT_DNS_SEARCH 31
 
