@@ -17,16 +17,18 @@ It is optimized for embedded Linux routers and compiles to <40 KB.
 
 1. Router Discovery support (solicitations and advertisements) with 2 modes
    server:	RD server for slave interfaces
+   a) automatic detection of prefixes, delegated prefix and default routes, MTU
+   b) automatic reannouncement when changes to prefixes or routes occur
+
    relay:	RD relay between master and slave interfaces
    a) support for rewriting announced DNS-server addresses in relay mode
-   b) support for automatically picking up announced prefixes in server mode
-   c) support for automatically picking up delegated prefixes in server mode
    
 3. DHCPv6-support with 2 modes of operation
    server:	minimalistic server mode
    a) stateless and stateful address assignment
    b) prefix delegation support
-   c) dynamic reconfiguration support
+   c) dynamic reconfiguration in case prefixes change
+   d) hostname detection and hosts-file creation
 
    relay: 	mostly standards-compliant DHCPv6-relay
    a) support for rewriting announced DNS-server addresses
@@ -54,8 +56,9 @@ It is optimized for embedded Linux routers and compiles to <40 KB.
 
 1. If there are non-local addresses assigned to the slave interface when a
    router solicitation is received, said prefixes are announced automatically
-   for stateless autoconfiguration. If the prefixes are bigger than /64 all but
-   the first /64 is offered via DHCPv6-PD to downstream routers.
+   for stateless autoconfiguration and also offered via stateful DHCPv6.
+   If all prefixes are bigger than /64 all but the first /64 of these prefixes
+   is offered via DHCPv6-PD to downstream routers.
 
 2. If DNS servers should be announced (DHCPv6 server-mode) then a local DNS-
    proxy (e.g. dnsmasq) needs to be run on the router itself because 6relayd
