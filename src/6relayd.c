@@ -280,7 +280,7 @@ static int print_usage(const char *name)
 	"	   server	mini-server for Router Discovery on slaves\n"
 	"	-D <mode>	Enable DHCPv6-support\n"
 	"	   relay	standards-compliant relay\n"
-	"	   server	mini-server for stateless DHCPv6 on slaves\n"
+	"	   server	server for DHCPv6 + PD on slaves\n"
 	"	-N		Enable Neighbor Discovery Proxy (NDP)\n"
 	"\nFeature options:\n"
 	"	-s		Send initial RD-Solicitation to <master>\n"

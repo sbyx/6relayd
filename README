@@ -65,7 +65,7 @@ It is optimized for embedded Linux routers and compiles to <40 KB.
    will always announce a local address as DNS-server (if not otherwise
    configured).
 
-3. 6relayd is run with the appropriate parameters (e.g. -S).
+3. 6relayd is run with the appropriate parameters (e.g. -S . eth0).
    See 6relayd -h for command line parameters.
 
 
@@ -85,5 +85,5 @@ It is optimized for embedded Linux routers and compiles to <40 KB.
    needs to be run and configued on the same router where 6relayd is running.
    (This step can most likely be skipped in most environments.)
    
-3. 6relayd is run with the appropriate parameters (e.g. -A).
+3. 6relayd is run with the appropriate parameters (e.g. -A eth0 eth1).
    See 6relayd -h for command line paoffered.
