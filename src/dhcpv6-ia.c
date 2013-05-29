@@ -262,7 +262,7 @@ static void write_statefile(void)
 					if (c->length == 128 && c->hostname)
 						fprintf(fp, "%s\t%s\n", ipbuf, c->hostname);
 
-					l += snprintf(leasebuf + l, sizeof(leasebuf) - l, "%s ", ipbuf);
+					l += snprintf(leasebuf + l, sizeof(leasebuf) - l, "%s/%hhu ", ipbuf, c->length);
 				}
 				leasebuf[l - 1] = '\n';
 				fwrite(leasebuf, 1, l, fp);
