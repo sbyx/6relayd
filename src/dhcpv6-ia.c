@@ -362,7 +362,7 @@ static int prefixcmp(const void *va, const void *vb)
 	const struct relayd_ipaddr *a = va, *b = vb;
 	uint32_t a_pref = ((a->addr.s6_addr[0] & 0xfe) != 0xfc) ? a->preferred : 1;
 	uint32_t b_pref = ((b->addr.s6_addr[0] & 0xfe) != 0xfc) ? b->preferred : 1;
-	return (a_pref < b_pref) ? -1 : (a_pref > b_pref) ? 1 : 0;
+	return (a_pref < b_pref) ? 1 : (a_pref > b_pref) ? -1 : 0;
 }
 
 
