@@ -514,7 +514,7 @@ static size_t append_reply(uint8_t *buf, size_t buflen, uint16_t status,
 				uint32_t prefix_valid = iface->pd_addr[i].valid - now;
 
 				if (iface->pd_addr[i].prefix > 64 ||
-						iface->pd_addr[i].preferred <= now)
+						iface->pd_addr[i].preferred <= (uint32_t)now)
 					continue;
 
 				// ULA-deprecation compatibility workaround
@@ -597,7 +597,7 @@ static size_t append_reply(uint8_t *buf, size_t buflen, uint16_t status,
 				if (a) {
 					for (size_t i = 0; i < iface->pd_addr_len; ++i) {
 						if (iface->pd_addr[i].prefix > 64 ||
-								iface->pd_addr[i].preferred <= now)
+								iface->pd_addr[i].preferred <= (uint32_t)now)
 							continue;
 
 						struct in6_addr addr = iface->pd_addr[i].addr;
