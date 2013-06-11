@@ -91,7 +91,9 @@ struct relayd_config {
 	bool always_rewrite_dns;
 	bool always_announce_default_router;
 	bool deprecate_ula_if_public_avail;
+	bool ra_not_onlink;
 	int ra_managed_mode;
+	int ra_preference;
 
 	struct in6_addr dnsaddr;
 	struct relayd_interface master;

@@ -263,6 +263,11 @@ static void send_router_advert(struct relayd_event *event)
 	adv.h.nd_ra_flags_reserved = ND_RA_FLAG_OTHER;
 	if (config->ra_managed_mode >= RELAYD_MANAGED_MFLAG)
 		adv.h.nd_ra_flags_reserved |= ND_RA_FLAG_MANAGED;
+
+	if (config->ra_preference < 0)
+		adv.h.nd_ra_flags_reserved |= ND_RA_PREF_LOW;
+	else if (config->ra_preference > 0)
+		adv.h.nd_ra_flags_reserved |= ND_RA_PREF_HIGH;
 	relayd_get_interface_mac(iface->ifname, adv.lladdr.data);
 
 	// If not currently shutting down
@@ -318,7 +323,9 @@ static void send_router_advert(struct relayd_event *event)
 		p->nd_opt_pi_type = ND_OPT_PREFIX_INFORMATION;
 		p->nd_opt_pi_len = 4;
 		p->nd_opt_pi_prefix_len = 64;
-		p->nd_opt_pi_flags_reserved = ND_OPT_PI_FLAG_ONLINK;
+		p->nd_opt_pi_flags_reserved = 0;
+		if (!config->ra_not_onlink)
+			p->nd_opt_pi_flags_reserved |= ND_OPT_PI_FLAG_ONLINK;
 		if (config->ra_managed_mode < RELAYD_MANAGED_NO_AFLAG)
 			p->nd_opt_pi_flags_reserved |= ND_OPT_PI_FLAG_AUTO;
 		p->nd_opt_pi_valid_time = htonl(addr->valid);
@@ -409,6 +416,10 @@ static void send_router_advert(struct relayd_event *event)
 		routes[routes_cnt].len = sizeof(*routes) / 8;
 		routes[routes_cnt].prefix = addr->prefix;
 		routes[routes_cnt].flags = 0;
+		if (config->ra_preference < 0)
+			routes[routes_cnt].flags |= ND_RA_PREF_LOW;
+		else if (config->ra_preference > 0)
+			routes[routes_cnt].flags |= ND_RA_PREF_HIGH;
 		routes[routes_cnt].lifetime = htonl(addr->valid);
 		routes[routes_cnt].addr[0] = addr->addr.s6_addr32[0];
 		routes[routes_cnt].addr[1] = addr->addr.s6_addr32[1];

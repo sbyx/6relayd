@@ -60,11 +60,13 @@ static void relayd_receive_packets(struct relayd_event *event);
 
 int main(int argc, char* const argv[])
 {
+	memset(&config, 0, sizeof(config));
+
 	const char *pidfile = "/var/run/6relayd.pid";
 	bool daemonize = false;
 	int verbosity = 0;
 	int c;
-	while ((c = getopt(argc, argv, "ASR:D:Nsucn::l:a:rt:m:p:dvh")) != -1) {
+	while ((c = getopt(argc, argv, "ASR:D:Nsucn::l:a:rt:m:oi:p:dvh")) != -1) {
 		switch (c) {
 		case 'A':
 			config.enable_router_discovery_relay = true;
@@ -143,6 +145,17 @@ int main(int argc, char* const argv[])
 
 		case 'm':
 			config.ra_managed_mode = atoi(optarg);
+			break;
+
+		case 'o':
+			config.ra_not_onlink = true;
+			break;
+
+		case 'i':
+			if (!strcmp(optarg, "low"))
+				config.ra_preference = -1;
+			else if (!strcmp(optarg, "high"))
+				config.ra_preference = 1;
 			break;
 
 		case 'p':
@@ -290,6 +303,11 @@ static int print_usage(const char *name)
 	"	   0 (default)	enable SLAAC and don't send Managed-Flag\n"
 	"	   1		enable SLAAC and send Managed-Flag\n"
 	"	   2		disable SLAAC and send Managed-Flag\n"
+	"	-o		RD: Don't send on-link flag for prefixes\n"
+	"	-i <preference>	RD: Route info and default preference\n"
+	"	   medium	medium priority (default)\n"
+	"	   low		low priority\n"
+	"	   high		high priority\n"
 	"	-n		RD/DHCPv6: always rewrite name server\n"
 	"	-l <file>,<cmd>	DHCPv6: IA lease-file and update callback\n"
 	"	-a <duid>:<val>	DHCPv6: IA_NA static assignment\n"
