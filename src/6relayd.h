@@ -123,6 +123,8 @@ int relayd_get_interface_mtu(const char *ifname);
 int relayd_get_interface_mac(const char *ifname, uint8_t mac[6]);
 struct relayd_interface* relayd_get_interface_by_index(int ifindex);
 void relayd_urandom(void *data, size_t len);
+void relayd_setup_route(const struct in6_addr *addr, int prefixlen,
+		const struct relayd_interface *iface, const struct in6_addr *gw, bool add);
 
 
 // Exported module initializers

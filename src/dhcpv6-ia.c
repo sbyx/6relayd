@@ -282,6 +282,19 @@ static void write_statefile(void)
 }
 
 
+static void apply_lease(struct relayd_interface *iface, struct assignment *a, bool add)
+{
+	if (a->length > 64)
+		return;
+
+	for (size_t i = 0; i < iface->pd_addr_len; ++i) {
+		struct in6_addr prefix = iface->pd_addr[i].addr;
+		prefix.s6_addr32[1] |= htonl(a->assigned);
+		relayd_setup_route(&prefix, a->length, iface, &a->peer.sin6_addr, add);
+	}
+}
+
+
 static bool assign_pd(struct relayd_interface *iface, struct assignment *assign)
 {
 	struct assignment *c;
@@ -297,6 +310,7 @@ static bool assign_pd(struct relayd_interface *iface, struct assignment *assign)
 
 			if (assign->assigned > current && assign->assigned + asize < c->assigned) {
 				list_add_tail(&assign->head, &c->head);
+				apply_lease(iface, assign, true);
 				return true;
 			}
 
@@ -314,6 +328,7 @@ static bool assign_pd(struct relayd_interface *iface, struct assignment *assign)
 		if (current + asize < c->assigned) {
 			assign->assigned = current;
 			list_add_tail(&assign->head, &c->head);
+			apply_lease(iface, assign, true);
 			return true;
 		}
 
@@ -400,6 +415,12 @@ static void update(struct relayd_interface *iface)
 	bool change = len != (int)iface->pd_addr_len
 			|| memcmp(iface->pd_addr, addr, len * sizeof(*border));
 
+	if (change) {
+		struct assignment *c;
+		list_for_each_entry(c, &iface->pd_assignments, head)
+			apply_lease(iface, c, false);
+	}
+
 	memcpy(iface->pd_addr, addr, len * sizeof(*addr));
 	iface->pd_addr_len = len;
 
@@ -412,6 +433,8 @@ static void update(struct relayd_interface *iface)
 
 			if (c->length < 128 && c->assigned >= border->assigned && c != border)
 				list_move(&c->head, &reassign);
+			else if (c != border)
+				apply_lease(iface, c, true);
 
 			if (c->reconf_cnt == 0) {
 				c->reconf_cnt = 1;
@@ -734,6 +757,7 @@ size_t dhcpv6_handle_ia(uint8_t *buf, size_t buflen, struct relayd_interface *if
 				a = c;
 
 				// Reset state
+				apply_lease(iface, a, false);
 				a->iaid = ia->iaid;
 				a->peer = *addr;
 				a->reconf_cnt = 0;
@@ -808,6 +832,7 @@ size_t dhcpv6_handle_ia(uint8_t *buf, size_t buflen, struct relayd_interface *if
 					a->hostname[hostname_len] = 0;
 				}
 				a->accept_reconf = accept_reconf;
+				apply_lease(iface, a, true);
 				update_state = true;
 			} else if (!assigned && a) { // Cleanup failed assignment
 				free(a->hostname);
@@ -825,6 +850,7 @@ size_t dhcpv6_handle_ia(uint8_t *buf, size_t buflen, struct relayd_interface *if
 				ia_response_len = append_reply(buf, buflen, status, ia, a, iface, false);
 			} else if (hdr->msg_type == DHCPV6_MSG_RELEASE) {
 				a->valid_until = 0;
+				apply_lease(iface, a, false);
 				update_state = true;
 			} else if (hdr->msg_type == DHCPV6_MSG_DECLINE && a->length == 128) {
 				a->clid_len = 0;

@@ -307,6 +307,51 @@ static void handle_solicit(void *addr, void *data, size_t len,
 }
 
 
+void relayd_setup_route(const struct in6_addr *addr, int prefixlen,
+		const struct relayd_interface *iface, const struct in6_addr *gw, bool add)
+{
+	struct req {
+		struct nlmsghdr nh;
+		struct rtmsg rtm;
+		struct rtattr rta_dst;
+		struct in6_addr dst_addr;
+		struct rtattr rta_oif;
+		uint32_t ifindex;
+		struct rtattr rta_table;
+		uint32_t table;
+		struct rtattr rta_gw;
+		struct in6_addr gw;
+	} req = {
+		{sizeof(req), 0, NLM_F_REQUEST, ++rtnl_seqid, 0},
+		{AF_INET6, prefixlen, 0, 0, 0, 0, 0, 0, 0},
+		{sizeof(struct rtattr) + sizeof(struct in6_addr), RTA_DST},
+		*addr,
+		{sizeof(struct rtattr) + sizeof(uint32_t), RTA_OIF},
+		iface->ifindex,
+		{sizeof(struct rtattr) + sizeof(uint32_t), RTA_TABLE},
+		RT_TABLE_MAIN,
+		{sizeof(struct rtattr) + sizeof(struct in6_addr), RTA_GATEWAY},
+		IN6ADDR_ANY_INIT,
+	};
+
+	if (gw)
+		req.gw = *gw;
+
+	if (add) {
+		req.nh.nlmsg_type = RTM_NEWROUTE;
+		req.nh.nlmsg_flags |= (NLM_F_CREATE | NLM_F_REPLACE);
+		req.rtm.rtm_protocol = RTPROT_BOOT;
+		req.rtm.rtm_scope = (gw) ? RT_SCOPE_UNIVERSE : RT_SCOPE_LINK;
+		req.rtm.rtm_type = RTN_UNICAST;
+	} else {
+		req.nh.nlmsg_type = RTM_DELROUTE;
+		req.rtm.rtm_scope = RT_SCOPE_NOWHERE;
+	}
+
+	size_t reqlen = (gw) ? sizeof(req) : offsetof(struct req, rta_gw);
+	send(rtnl_event.socket, &req, reqlen, MSG_DONTWAIT);
+}
+
 // Use rtnetlink to modify kernel routes
 static void setup_route(struct in6_addr *addr, struct relayd_interface *iface,
 		bool add)
@@ -319,38 +364,7 @@ static void setup_route(struct in6_addr *addr, struct relayd_interface *iface,
 	if (!iface || !config->enable_route_learning)
 		return;
 
-	struct {
-		struct nlmsghdr nh;
-		struct rtmsg rtm;
-		struct rtattr rta_dst;
-		struct in6_addr dst_addr;
-		struct rtattr rta_oif;
-		uint32_t ifindex;
-		struct rtattr rta_table;
-		uint32_t table;
-	} req = {
-		{sizeof(req), 0, NLM_F_REQUEST, ++rtnl_seqid, 0},
-		{AF_INET6, 128, 0, 0, 0, 0, 0, 0, 0},
-		{sizeof(struct rtattr) + sizeof(struct in6_addr), RTA_DST},
-		*addr,
-		{sizeof(struct rtattr) + sizeof(uint32_t), RTA_OIF},
-		iface->ifindex,
-		{sizeof(struct rtattr) + sizeof(uint32_t), RTA_TABLE},
-		RT_TABLE_MAIN
-	};
-
-	if (add) {
-		req.nh.nlmsg_type = RTM_NEWROUTE;
-		req.nh.nlmsg_flags |= (NLM_F_CREATE | NLM_F_REPLACE);
-		req.rtm.rtm_protocol = RTPROT_BOOT;
-		req.rtm.rtm_scope = RT_SCOPE_LINK;
-		req.rtm.rtm_type = RTN_UNICAST;
-	} else {
-		req.nh.nlmsg_type = RTM_DELROUTE;
-		req.rtm.rtm_scope = RT_SCOPE_NOWHERE;
-	}
-
-	send(rtnl_event.socket, &req, sizeof(req), MSG_DONTWAIT);
+	relayd_setup_route(addr, 128, iface, NULL, add);
 }
 
 static void free_neighbor(struct ndp_neighbor *n)
