@@ -78,6 +78,12 @@ int init_router_discovery_relay(const struct relayd_config *relayd_config)
 			iface->timer_rs.socket = timerfd_create(CLOCK_MONOTONIC,
 					TFD_CLOEXEC | TFD_NONBLOCK);
 			iface->timer_rs.handle_event = send_router_advert;
+
+			if (iface->timer_rs.socket < 0) {
+				syslog(LOG_ERR, "Failed to create timer: %s", strerror(errno));
+				return -1;
+			}
+
 			relayd_register_event(&iface->timer_rs);
 			send_router_advert(&iface->timer_rs);
 		}
