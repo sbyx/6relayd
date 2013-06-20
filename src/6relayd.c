@@ -308,7 +308,7 @@ static int print_usage(const char *name)
 	"	   medium	medium priority (default)\n"
 	"	   low		low priority\n"
 	"	   high		high priority\n"
-	"	-n		RD/DHCPv6: always rewrite name server\n"
+	"	-n [server]	RD/DHCPv6: always rewrite name server\n"
 	"	-l <file>,<cmd>	DHCPv6: IA lease-file and update callback\n"
 	"	-a <duid>:<val>	DHCPv6: IA_NA static assignment\n"
 	"	-r		NDP: learn routes to neighbors\n"
