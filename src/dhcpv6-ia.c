@@ -320,6 +320,7 @@ static bool assign_pd(struct relayd_interface *iface, struct assignment *assign)
 	}
 
 	// Fallback to a variable assignment
+	current = 1;
 	list_for_each_entry(c, &iface->pd_assignments, head) {
 		if (c->length == 128)
 			continue;
@@ -739,6 +740,8 @@ size_t dhcpv6_handle_ia(uint8_t *buf, size_t buflen, struct relayd_interface *if
 					if (p->prefix) {
 						reqlen = p->prefix;
 						reqhint = ntohl(p->addr.s6_addr32[1]);
+						if (reqlen > 32 && reqlen <= 64)
+							reqhint &= (1U << (64 - reqlen)) - 1;
 					}
 					break;
 				}
