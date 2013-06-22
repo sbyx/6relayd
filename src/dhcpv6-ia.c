@@ -429,7 +429,7 @@ static void update(struct relayd_interface *iface)
 		struct list_head reassign = LIST_HEAD_INIT(reassign);
 		struct assignment *c, *d;
 		list_for_each_entry_safe(c, d, &iface->pd_assignments, head) {
-			if (c->clid_len == 0 || c->valid_until < now || !c->accept_reconf)
+			if (c->clid_len == 0 || c->valid_until < now)
 				continue;
 
 			if (c->length < 128 && c->assigned >= border->assigned && c != border)
@@ -437,7 +437,7 @@ static void update(struct relayd_interface *iface)
 			else if (c != border)
 				apply_lease(iface, c, true);
 
-			if (c->reconf_cnt == 0) {
+			if (c->accept_reconf && c->reconf_cnt == 0) {
 				c->reconf_cnt = 1;
 				c->reconf_sent = now;
 				send_reconf(iface, c);
