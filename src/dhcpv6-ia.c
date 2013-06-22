@@ -851,6 +851,8 @@ size_t dhcpv6_handle_ia(uint8_t *buf, size_t buflen, struct relayd_interface *if
 			} else if (hdr->msg_type == DHCPV6_MSG_RENEW ||
 					hdr->msg_type == DHCPV6_MSG_REBIND) {
 				ia_response_len = append_reply(buf, buflen, status, ia, a, iface, false);
+				if (a)
+					apply_lease(iface, a, true);
 			} else if (hdr->msg_type == DHCPV6_MSG_RELEASE) {
 				a->valid_until = 0;
 				apply_lease(iface, a, false);
