@@ -419,7 +419,8 @@ static void update(struct relayd_interface *iface)
 	if (change) {
 		struct assignment *c;
 		list_for_each_entry(c, &iface->pd_assignments, head)
-			apply_lease(iface, c, false);
+			if (c != border)
+				apply_lease(iface, c, false);
 	}
 
 	memcpy(iface->pd_addr, addr, len * sizeof(*addr));
