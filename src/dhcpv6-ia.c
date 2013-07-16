@@ -308,7 +308,7 @@ static bool assign_pd(struct relayd_interface *iface, struct assignment *assign)
 			if (c->length == 128)
 				continue;
 
-			if (assign->assigned > current && assign->assigned + asize < c->assigned) {
+			if (assign->assigned >= current && assign->assigned + asize < c->assigned) {
 				list_add_tail(&assign->head, &c->head);
 				apply_lease(iface, assign, true);
 				return true;
