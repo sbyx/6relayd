@@ -277,10 +277,15 @@ static void handle_client_request(void *addr, void *data, size_t len,
 			return;
 	}
 
-	struct relayd_ipaddr ipaddr;
-	if (relayd_get_interface_addresses(iface->ifindex, &ipaddr, 1) == 1) {
-		dnsaddr.addr = ipaddr.addr;
+	if (!IN6_IS_ADDR_UNSPECIFIED(&config->dnsaddr)) {
+		dnsaddr.addr = config->dnsaddr;
 		iov[2].iov_len = sizeof(dnsaddr);
+	} else {
+		struct relayd_ipaddr ipaddr;
+		if (relayd_get_interface_addresses(iface->ifindex, &ipaddr, 1) == 1) {
+			dnsaddr.addr = ipaddr.addr;
+			iov[2].iov_len = sizeof(dnsaddr);
+		}
 	}
 
 	if (iov[0].iov_len > 0) // Update length
