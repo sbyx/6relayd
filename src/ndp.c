@@ -30,7 +30,6 @@
 #include "ndp.h"
 
 
-static const struct relayd_config *config = NULL;
 
 static void handle_solicit(void *addr, void *data, size_t len,
 		struct relayd_interface *iface);
@@ -47,7 +46,7 @@ static size_t neighbor_count = 0;
 static uint32_t rtnl_seqid = 0;
 
 static int ping_socket = -1;
-static struct relayd_event ndp_event_solicit = {-1, NULL, handle_solicit};
+static struct relayd_event ndp_event = {-1, NULL, handle_solicit};
 static struct relayd_event rtnl_event = {-1, NULL, handle_rtnetlink};
 
 
@@ -65,12 +64,8 @@ static const struct sock_fprog bpf_prog = {sizeof(bpf) / sizeof(*bpf), bpf};
 
 
 // Initialize NDP-proxy
-int init_ndp_proxy(const struct relayd_config *relayd_config)
+int init_ndp(void)
 {
-	config = relayd_config;
-	if (config->slavecount < 1)
-		return 0;
-
 	// Setup netlink socket
 	if ((rtnl_event.socket = relayd_open_rtnl_socket()) < 0)
 		return -1;
@@ -93,31 +88,8 @@ int init_ndp_proxy(const struct relayd_config *relayd_config)
 		{.ifa_family = AF_INET6}
 	};
 	send(rtnl_event.socket, &req2, sizeof(req2), MSG_DONTWAIT);
-
 	relayd_register_event(&rtnl_event);
 
-
-
-	// Test if disabled
-	if (!config->enable_ndp_relay || config->slavecount < 1)
-		return 0;
-
-	for (size_t i = 0; i < config->static_ndp_len; ++i) {
-		struct ndp_neighbor *n = malloc(sizeof(*n));
-		n->timeout = 0;
-
-		char ipbuf[INET6_ADDRSTRLEN];
-		char iface[16];
-
-		if (sscanf(config->static_ndp[i], "%45s/%hhu:%15s", ipbuf, &n->len, iface) < 3
-				|| n->len > 128 || inet_pton(AF_INET6, ipbuf, &n->addr) != 1 ||
-				!(n->iface = relayd_get_interface_by_name(iface))) {
-			syslog(LOG_ERR, "Invalid static NDP-prefix %s", config->static_ndp[i]);
-			return -1;
-		}
-
-		list_add(&n->head, &neighbors);
-	}
 
 	// Create socket for intercepting NDP
 	int sock = socket(AF_PACKET, SOCK_DGRAM | SOCK_CLOEXEC | SOCK_NONBLOCK,
@@ -134,20 +106,8 @@ int init_ndp_proxy(const struct relayd_config *relayd_config)
 		return -1;
 	}
 
-
-	struct packet_mreq mreq = {config->master.ifindex,
-			PACKET_MR_ALLMULTI, ETH_ALEN, {0}};
-	setsockopt(sock, SOL_PACKET, PACKET_ADD_MEMBERSHIP,
-			&mreq, sizeof(mreq));
-
-	for (size_t i = 0; i < config->slavecount; ++i) {
-		mreq.mr_ifindex = config->slaves[i].ifindex;
-		setsockopt(sock, SOL_PACKET, PACKET_ADD_MEMBERSHIP,
-				&mreq, sizeof(mreq));
-	}
-
-	ndp_event_solicit.socket = sock;
-	relayd_register_event(&ndp_event_solicit);
+	ndp_event.socket = sock;
+	relayd_register_event(&ndp_event);
 
 	// Open ICMPv6 socket
 	ping_socket = socket(AF_INET6, SOCK_RAW | SOCK_CLOEXEC, IPPROTO_ICMPV6);
@@ -157,22 +117,18 @@ int init_ndp_proxy(const struct relayd_config *relayd_config)
 
 	// This is required by RFC 4861
 	val = 255;
-	setsockopt(ping_socket, IPPROTO_IPV6, IPV6_MULTICAST_HOPS,
-			&val, sizeof(val));
-	setsockopt(ping_socket, IPPROTO_IPV6, IPV6_UNICAST_HOPS,
-			&val, sizeof(val));
+	setsockopt(ping_socket, IPPROTO_IPV6, IPV6_MULTICAST_HOPS, &val, sizeof(val));
+	setsockopt(ping_socket, IPPROTO_IPV6, IPV6_UNICAST_HOPS, &val, sizeof(val));
 
 	// Filter all packages, we only want to send
 	struct icmp6_filter filt;
 	ICMP6_FILTER_SETBLOCKALL(&filt);
-	setsockopt(ping_socket, IPPROTO_ICMPV6, ICMP6_FILTER,
-			&filt, sizeof(filt));
+	setsockopt(ping_socket, IPPROTO_ICMPV6, ICMP6_FILTER, &filt, sizeof(filt));
 
 
 	// Netlink socket, continued...
 	group = RTNLGRP_NEIGH;
-	setsockopt(rtnl_event.socket, SOL_NETLINK,
-			NETLINK_ADD_MEMBERSHIP, &group, sizeof(group));
+	setsockopt(rtnl_event.socket, SOL_NETLINK, NETLINK_ADD_MEMBERSHIP, &group, sizeof(group));
 
 	// Synthesize initial neighbor events
 	struct {
@@ -189,14 +145,41 @@ int init_ndp_proxy(const struct relayd_config *relayd_config)
 }
 
 
-// Deinitialize NDP proxy
-void deinit_ndp_proxy()
+int setup_ndp_interface(struct relayd_interface *iface, bool enable)
 {
-	while (!list_empty(&neighbors)) {
-		struct ndp_neighbor *c = list_first_entry(&neighbors,
-				struct ndp_neighbor, head);
-		modify_neighbor(&c->addr, c->iface, false);
+	struct packet_mreq mreq = {iface->ifindex, PACKET_MR_ALLMULTI, ETH_ALEN, {0}};
+	setsockopt(ndp_event.socket, SOL_PACKET, PACKET_DROP_MEMBERSHIP, &mreq, sizeof(mreq));
+
+	struct ndp_neighbor *c, *n;
+	list_for_each_entry_safe(c, n, &neighbors, head)
+		if (c->iface == iface && (c->timeout == 0 || iface->ndp != RELAYD_RELAY || !enable))
+			modify_neighbor(&c->addr, c->iface, false);
+
+	if (enable && iface->ndp == RELAYD_RELAY) {
+		setsockopt(ndp_event.socket, SOL_PACKET, PACKET_ADD_MEMBERSHIP, &mreq, sizeof(mreq));
+
+		if (iface->static_ndp_len) {
+			char *entry = alloca(iface->static_ndp_len), *saveptr;
+			memcpy(entry, iface->static_ndp, iface->static_ndp_len);
+
+			for (entry = strtok_r(entry, " ", &saveptr); entry; entry = strtok_r(NULL, " ", &saveptr)) {
+				struct ndp_neighbor *n = malloc(sizeof(*n));
+				n->iface = iface;
+				n->timeout = 0;
+
+				char ipbuf[INET6_ADDRSTRLEN];
+				if (sscanf(entry, "%45s/%hhu", ipbuf, &n->len) < 2
+						|| n->len > 128 || inet_pton(AF_INET6, ipbuf, &n->addr) != 1) {
+					syslog(LOG_ERR, "Invalid static NDP-prefix %s", entry);
+					return -1;
+				}
+
+				list_add(&n->head, &neighbors);
+			}
+		}
 	}
+
+	return 0;
 }
 
 
@@ -292,14 +275,11 @@ static void handle_solicit(void *addr, void *data, size_t len,
 		// We will observe the neighbor cache to see results.
 
 		ssize_t sent = 0;
-		if (iface != &config->master)
-			sent += ping6(&req->nd_ns_target, &config->master);
-
-		for (size_t i = 0; i < config->slavecount; ++i)
-			if ((!ns_is_dad || config->slaves[i].external == false)
-					&& iface != &config->slaves[i])
-				sent += ping6(&req->nd_ns_target,
-						&config->slaves[i]);
+		struct relayd_interface *c;
+		list_for_each_entry(c, &interfaces, head)
+			if (iface->ndp == RELAYD_RELAY && iface != c &&
+					(!ns_is_dad || !c->external == false))
+				sent += ping6(&req->nd_ns_target, c);
 
 		if (sent > 0) // Sent a ping, add pending neighbor entry
 			modify_neighbor(&req->nd_ns_target, NULL, true);
@@ -361,7 +341,7 @@ static void setup_route(struct in6_addr *addr, struct relayd_interface *iface,
 	syslog(LOG_NOTICE, "%s about %s on %s", (add) ? "Learned" : "Forgot",
 			namebuf, (iface) ? iface->ifname : "<pending>");
 
-	if (!iface || !config->enable_route_learning)
+	if (!iface || !iface->learn_routes)
 		return;
 
 	relayd_setup_route(addr, 128, iface, NULL, add);
@@ -467,8 +447,7 @@ static void handle_rtnetlink(_unused void *addr, void *data, size_t len,
 	for (struct nlmsghdr *nh = data; NLMSG_OK(nh, len);
 			nh = NLMSG_NEXT(nh, len)) {
 		struct rtmsg *rtm = NLMSG_DATA(nh);
-		if (config->enable_router_discovery_server &&
-				(nh->nlmsg_type == RTM_NEWROUTE ||
+		if ((nh->nlmsg_type == RTM_NEWROUTE ||
 				nh->nlmsg_type == RTM_DELROUTE) &&
 				rtm->rtm_dst_len == 0)
 			raise(SIGUSR1); // Inform about a change in default route
@@ -519,25 +498,28 @@ static void handle_rtnetlink(_unused void *addr, void *data, size_t len,
 				(NUD_REACHABLE | NUD_STALE | NUD_DELAY | NUD_PROBE
 						| NUD_PERMANENT | NUD_NOARP)));
 
-		if (config->enable_ndp_relay)
+		if (iface->ndp == RELAYD_RELAY)
 			modify_neighbor(addr, iface, add);
 
-		if (is_addr && config->enable_router_discovery_server)
+		if (is_addr && iface->ra == RELAYD_SERVER)
 			raise(SIGUSR1); // Inform about a change in addresses
 
-		if (is_addr && config->enable_dhcpv6_server)
-			iface->pd_reconf = true;
+		if (is_addr && iface->dhcpv6 == RELAYD_SERVER)
+			iface->ia_reconf = true;
 
-		if (config->enable_ndp_relay && is_addr && iface == &config->master) {
+		if (iface->ndp == RELAYD_RELAY && is_addr && iface->master) {
 			// Replay address changes on all slave interfaces
 			nh->nlmsg_flags = NLM_F_REQUEST;
 
 			if (nh->nlmsg_type == RTM_NEWADDR)
 				nh->nlmsg_flags |= NLM_F_CREATE | NLM_F_REPLACE;
 
-			for (size_t i = 0; i < config->slavecount; ++i) {
-				ifa->ifa_index = config->slaves[i].ifindex;
-				send(rtnl_event.socket, nh, nh->nlmsg_len, MSG_DONTWAIT);
+			struct relayd_interface *c;
+			list_for_each_entry(c, &interfaces, head) {
+				if (c->ndp == RELAYD_RELAY && !c->master) {
+					ifa->ifa_index = c->ifindex;
+					send(rtnl_event.socket, nh, nh->nlmsg_len, MSG_DONTWAIT);
+				}
 			}
 		}
 

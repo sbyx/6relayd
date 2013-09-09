@@ -138,6 +138,8 @@ struct dhcpv6_ia_addr {
 		((olen) = _o[2] << 8 | _o[3]) + (odata) <= (end); \
 		_o += 4 + (_o[2] << 8 | _o[3]))
 
-int dhcpv6_init_ia(const struct relayd_config *relayd_config, int socket);
+int dhcpv6_init_ia(struct relayd_interface *iface, int socket);
 size_t dhcpv6_handle_ia(uint8_t *buf, size_t buflen, struct relayd_interface *iface,
 		const struct sockaddr_in6 *addr, const void *data, const uint8_t *end);
+int dhcpv6_ia_init(int dhcpv6_socket);
+int setup_dhcpv6_ia_interface(struct relayd_interface *iface, bool enable);

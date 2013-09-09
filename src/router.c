@@ -30,118 +30,25 @@
 
 static void forward_router_solicitation(const struct relayd_interface *iface);
 static void forward_router_advertisement(uint8_t *data, size_t len);
-static int open_icmpv6_socket(struct icmp6_filter *filt,
-		struct ipv6_mreq *slave_mreq);
 
 static void handle_icmpv6(void *addr, void *data, size_t len,
 		struct relayd_interface *iface);
 static void send_router_advert(struct relayd_event *event);
 static void sigusr1_refresh(int signal);
 
-static struct relayd_event router_discovery_event = {-1, NULL, handle_icmpv6};
+static struct relayd_event router_event = {-1, NULL, handle_icmpv6};
 
 static FILE *fp_route = NULL;
-static const struct relayd_config *config = NULL;
-static bool in_shutdown = false;
 
 
-
-int init_router_discovery_relay(const struct relayd_config *relayd_config)
+int init_router(void)
 {
-	config = relayd_config;
-
-	// Filter ICMPv6 package types
-	struct icmp6_filter filt;
-	ICMP6_FILTER_SETBLOCKALL(&filt);
-	ICMP6_FILTER_SETPASS(ND_ROUTER_ADVERT, &filt);
-	ICMP6_FILTER_SETPASS(ND_ROUTER_SOLICIT, &filt);
-
 	// Open ICMPv6 socket
-	struct ipv6_mreq slaves = {ALL_IPV6_ROUTERS, config->master.ifindex};
-	router_discovery_event.socket = open_icmpv6_socket(&filt, &slaves);
-
-	if (router_discovery_event.socket < 0) {
-		syslog(LOG_ERR, "Failed to open RAW-socket: %s",
-				strerror(errno));
-		return -1;
-	}
-
-	if (!(fp_route = fopen("/proc/net/ipv6_route", "r"))) {
-		syslog(LOG_ERR, "Failed to open routing table: %s",
-				strerror(errno));
-		return -1;
-	}
-
-	if (config->enable_router_discovery_server) {
-		for (size_t i = 0; i < config->slavecount; ++i) {
-			struct relayd_interface *iface = &config->slaves[i];
-			iface->timer_rs.socket = timerfd_create(CLOCK_MONOTONIC,
-					TFD_CLOEXEC | TFD_NONBLOCK);
-			iface->timer_rs.handle_event = send_router_advert;
-
-			if (iface->timer_rs.socket < 0) {
-				syslog(LOG_ERR, "Failed to create timer: %s", strerror(errno));
-				return -1;
-			}
-
-			relayd_register_event(&iface->timer_rs);
-			send_router_advert(&iface->timer_rs);
-		}
-
-		// Disable looping for RA-events
-		int zero = 0;
-		setsockopt(router_discovery_event.socket, IPPROTO_IPV6,
-				IPV6_MULTICAST_LOOP, &zero, sizeof(zero));
-
-		// Get informed when addresses change
-		struct sigaction sa = {.sa_handler = sigusr1_refresh};
-		sigaction(SIGUSR1, &sa, NULL);
-	} else if (config->enable_router_discovery_relay) {
-		struct ipv6_mreq an = {ALL_IPV6_NODES, config->master.ifindex};
-		setsockopt(router_discovery_event.socket, IPPROTO_IPV6,
-				IPV6_ADD_MEMBERSHIP, &an, sizeof(an));
-	}
-
-	if (config->send_router_solicitation)
-		forward_router_solicitation(&config->master);
-
-	if (config->slavecount > 0 && (config->enable_router_discovery_relay ||
-			config->enable_router_discovery_server))
-		relayd_register_event(&router_discovery_event);
-	else
-		close(router_discovery_event.socket);
-
-	return 0;
-}
-
-
-void deinit_router_discovery_relay(void)
-{
-	if (config->enable_router_discovery_server) {
-		in_shutdown = true;
-		for (size_t i = 0; i < config->slavecount; ++i)
-			send_router_advert(&config->slaves[i].timer_rs);
-	}
-}
-
-
-// Signal handler to resend all RDs
-static void sigusr1_refresh(_unused int signal)
-{
-	struct itimerspec its = {{0, 0}, {1, 0}};
-	for (size_t i = 0; i < config->slavecount; ++i)
-		timerfd_settime(config->slaves[i].timer_rs.socket,
-				0, &its, NULL);
-}
-
-
-// Create an ICMPv6 socket and setup basic attributes
-static int open_icmpv6_socket(struct icmp6_filter *filt,
-		struct ipv6_mreq *slave_mreq)
-{
 	int sock = socket(AF_INET6, SOCK_RAW | SOCK_CLOEXEC, IPPROTO_ICMPV6);
-	if (sock < 0)
+	if (sock < 0) {
+		syslog(LOG_ERR, "Failed to open RAW-socket: %s", strerror(errno));
 		return -1;
+	}
 
 	// Let the kernel compute our checksums
 	int val = 2;
@@ -157,16 +64,81 @@ static int open_icmpv6_socket(struct icmp6_filter *filt,
 	setsockopt(sock, IPPROTO_IPV6, IPV6_RECVPKTINFO, &val, sizeof(val));
 
 	// Filter ICMPv6 package types
-	setsockopt(sock, IPPROTO_ICMPV6, ICMP6_FILTER, filt, sizeof(*filt));
+	struct icmp6_filter filt;
+	ICMP6_FILTER_SETBLOCKALL(&filt);
+	ICMP6_FILTER_SETPASS(ND_ROUTER_ADVERT, &filt);
+	ICMP6_FILTER_SETPASS(ND_ROUTER_SOLICIT, &filt);
+	setsockopt(sock, IPPROTO_ICMPV6, ICMP6_FILTER, &filt, sizeof(filt));
 
-	// Configure multicast addresses
-	for (size_t i = 0; i < config->slavecount; ++i) {
-		slave_mreq->ipv6mr_interface = config->slaves[i].ifindex;
-		setsockopt(sock, IPPROTO_IPV6, IPV6_ADD_MEMBERSHIP,
-				slave_mreq, sizeof(*slave_mreq));
+	// Register socket
+	router_event.socket = sock;
+	relayd_register_event(&router_event);
+
+	if (!(fp_route = fopen("/proc/net/ipv6_route", "r"))) {
+		syslog(LOG_ERR, "Failed to open routing table: %s",
+				strerror(errno));
+		return -1;
 	}
 
-	return sock;
+	signal(SIGUSR1, sigusr1_refresh);
+	return 0;
+}
+
+
+int setup_router_interface(struct relayd_interface *iface, bool enable)
+{
+	struct ipv6_mreq all_nodes = {ALL_IPV6_NODES, iface->ifindex};
+	struct ipv6_mreq all_routers = {ALL_IPV6_ROUTERS, iface->ifindex};
+
+	if (iface->timer_rs.socket > 0) {
+		close(iface->timer_rs.socket);
+		iface->timer_rs.socket = -1;
+	}
+
+	setsockopt(router_event.socket, IPPROTO_IPV6, IPV6_DROP_MEMBERSHIP,
+			&all_nodes, sizeof(all_nodes));
+	setsockopt(router_event.socket, IPPROTO_IPV6, IPV6_DROP_MEMBERSHIP,
+			&all_routers, sizeof(all_routers));
+
+	if (!enable) {
+		if (iface->ra)
+			send_router_advert(&iface->timer_rs);
+	} else {
+		void *mreq = &all_routers;
+
+		if (iface->ra == RELAYD_RELAY && iface->master) {
+			mreq = &all_nodes;
+			forward_router_solicitation(iface);
+		} else if (iface->ra == RELAYD_SERVER && !iface->master) {
+			iface->timer_rs.socket = timerfd_create(CLOCK_MONOTONIC,
+					TFD_CLOEXEC | TFD_NONBLOCK);
+			iface->timer_rs.handle_event = send_router_advert;
+
+			if (iface->timer_rs.socket < 0) {
+				syslog(LOG_ERR, "Failed to create timer: %s", strerror(errno));
+				return -1;
+			}
+
+			relayd_register_event(&iface->timer_rs);
+			send_router_advert(&iface->timer_rs);
+		}
+
+		if (iface->ra == RELAYD_RELAY || (iface->ra == RELAYD_SERVER && !iface->master))
+			setsockopt(router_event.socket, IPPROTO_IPV6,
+					IPV6_ADD_MEMBERSHIP, mreq, sizeof(all_nodes));
+	}
+	return 0;
+}
+
+
+// Signal handler to resend all RDs
+static void sigusr1_refresh(_unused int signal)
+{
+	struct itimerspec its = {{0, 0}, {1, 0}};
+	struct relayd_interface *iface;
+	list_for_each_entry(iface, &interfaces, head)
+		if (iface->ra == RELAYD_SERVER && !iface->master)
+			timerfd_settime(iface->timer_rs.socket, 0, &its, NULL);
 }
 
 
@@ -175,17 +147,14 @@ static void handle_icmpv6(_unused void *addr, void *data, size_t len,
 		struct relayd_interface *iface)
 {
 	struct icmp6_hdr *hdr = data;
-	if (config->enable_router_discovery_server) { // Server mode
-		if (hdr->icmp6_type == ND_ROUTER_SOLICIT &&
-				iface != &config->master)
+	if ((iface->ra == RELAYD_SERVER && !iface->master)) { // Server mode
+		if (hdr->icmp6_type == ND_ROUTER_SOLICIT)
 			send_router_advert(&iface->timer_rs);
-	} else { // Relay mode
-		if (hdr->icmp6_type == ND_ROUTER_ADVERT
-				&& iface == &config->master)
+	} else if (iface->ra == RELAYD_RELAY) { // Relay mode
+		if (hdr->icmp6_type == ND_ROUTER_ADVERT && iface->master)
 			forward_router_advertisement(data, len);
-		else if (hdr->icmp6_type == ND_ROUTER_SOLICIT
-				&& iface != &config->master)
-			forward_router_solicitation(&config->master);
+		else if (hdr->icmp6_type == ND_ROUTER_SOLICIT && !iface->master)
+			forward_router_solicitation(relayd_get_master_interface());
 	}
 }
 
@@ -267,12 +236,12 @@ static void send_router_advert(struct relayd_event *event)
 		.mtu = {ND_OPT_MTU, 1, 0, htonl(mtu)},
 	};
 	adv.h.nd_ra_flags_reserved = ND_RA_FLAG_OTHER;
-	if (config->ra_managed_mode >= RELAYD_MANAGED_MFLAG)
+	if (iface->managed >= RELAYD_MANAGED_MFLAG)
 		adv.h.nd_ra_flags_reserved |= ND_RA_FLAG_MANAGED;
 
-	if (config->ra_preference < 0)
+	if (iface->route_preference < 0)
 		adv.h.nd_ra_flags_reserved |= ND_RA_PREF_LOW;
-	else if (config->ra_preference > 0)
+	else if (iface->route_preference > 0)
 		adv.h.nd_ra_flags_reserved |= ND_RA_PREF_HIGH;
 	relayd_get_interface_mac(iface->ifname, adv.lladdr.data);
 
@@ -280,22 +249,24 @@ static void send_router_advert(struct relayd_event *event)
 	struct relayd_ipaddr addrs[RELAYD_MAX_PREFIXES];
 	ssize_t ipcnt = 0;
 
-	if (!in_shutdown) {
+	// If not shutdown
+	if (event->socket > 0) {
 		ipcnt = relayd_get_interface_addresses(iface->ifindex,
 				addrs, ARRAY_SIZE(addrs));
 
-		if (parse_routes(addrs, ipcnt)) // Have default route
+		// Check default route
+		if (parse_routes(addrs, ipcnt) || iface->default_router > 1)
 			adv.h.nd_ra_router_lifetime =
 					htons(3 * MaxRtrAdvInterval);
 	}
-
 
 	// Construct Prefix Information options
 	bool have_public = false;
 	size_t cnt = 0;
 
-	const struct in6_addr *pref_addr = NULL;
-	uint32_t pref_time = 0;
+	struct in6_addr *dns_addr = NULL;
+	uint32_t dns_time = 0;
+	size_t dns_cnt = 1;
 
 	for (ssize_t i = 0; i < ipcnt; ++i) {
 		struct relayd_ipaddr *addr = &addrs[i];
@@ -330,72 +301,79 @@ static void send_router_advert(struct relayd_event *event)
 		p->nd_opt_pi_len = 4;
 		p->nd_opt_pi_prefix_len = 64;
 		p->nd_opt_pi_flags_reserved = 0;
-		if (!config->ra_not_onlink)
+		if (!iface->ra_not_onlink)
 			p->nd_opt_pi_flags_reserved |= ND_OPT_PI_FLAG_ONLINK;
-		if (config->ra_managed_mode < RELAYD_MANAGED_NO_AFLAG)
+		if (iface->managed < RELAYD_MANAGED_NO_AFLAG)
 			p->nd_opt_pi_flags_reserved |= ND_OPT_PI_FLAG_AUTO;
 		p->nd_opt_pi_valid_time = htonl(addr->valid);
 		p->nd_opt_pi_preferred_time = htonl(addr->preferred);
 
-		if (addr->preferred > pref_time) {
-			pref_time = addr->preferred;
-			pref_addr = &addr->addr;
+		if (addr->preferred > dns_time) {
+			dns_time = addr->preferred;
+			dns_addr = &addr->addr;
 		}
 	}
 
-	if (!have_public && !config->always_announce_default_router && adv.h.nd_ra_router_lifetime) {
+	if (!have_public && !iface->default_router && adv.h.nd_ra_router_lifetime) {
 		syslog(LOG_WARNING, "A default route is present but there is no public prefix "
 				"on %s thus we don't announce a default route!", iface->ifname);
 		adv.h.nd_ra_router_lifetime = 0;
 	}
 
-	if (have_public && config->deprecate_ula_if_public_avail)
+	if (have_public && iface->deprecate_ula_if_public_avail)
 		for (size_t i = 0; i < cnt; ++i)
 			if ((adv.prefix[i].nd_opt_pi_prefix.s6_addr[0] & 0xfe) == 0xfc)
 				adv.prefix[i].nd_opt_pi_preferred_time = 0;
 
-	struct {
-		uint8_t type;
-		uint8_t len;
-		uint8_t pad;
-		uint8_t pad2;
-		uint32_t lifetime;
-		struct in6_addr addr;
-	} dns = {ND_OPT_RECURSIVE_DNS, 3, 0, 0,
-			htonl(pref_time), IN6ADDR_ANY_INIT};
-	size_t dnslen = 0;
-
-	if (config->always_rewrite_dns && !IN6_IS_ADDR_UNSPECIFIED(&config->dnsaddr))
-		pref_addr = &config->dnsaddr;
-
-	if (pref_addr) {
-		dns.addr = *pref_addr;
-		dnslen = sizeof(dns);
+	// DNS Recursive DNS
+	if (iface->dns_cnt > 0) {
+		dns_addr = iface->dns;
+		dns_cnt = iface->dns_cnt;
+		dns_time = 2 * MaxRtrAdvInterval;
 	}
 
-
 	struct {
 		uint8_t type;
 		uint8_t len;
 		uint8_t pad;
 		uint8_t pad2;
 		uint32_t lifetime;
-		uint8_t name[256];
-	} domain = {ND_OPT_DNS_SEARCH, 3, 0, 0,
-			htonl(3 * MaxRtrAdvInterval), {0}};
-	size_t domain_len = 0;
+	} dns = {ND_OPT_RECURSIVE_DNS, (1 + (2 * dns_cnt)), 0, 0, htonl(dns_time)};
 
-	res_init();
-	const char *search = _res.dnsrch[0];
-	if (search && search[0]) {
-		int len = dn_comp(search, domain.name,
-				sizeof(domain.name), NULL, NULL);
+
+
+	// DNS Search options
+	uint8_t search_buf[256], *search_domain = iface->search;
+	size_t search_len = iface->search_len, search_padded = 0;
+
+	if (!search_domain && !res_init() && _res.dnsrch[0] && _res.dnsrch[0][0]) {
+		int len = dn_comp(_res.dnsrch[0], search_buf,
+				sizeof(search_buf), NULL, NULL);
 		if (len > 0) {
-			domain_len = ((len + 7) & (~7)) + 8;
-			domain.len = domain_len / 8;
+			search_domain = search_buf;
+			search_len = len;
 		}
-
 	}
+
+	if (search_len > 0)
+		search_padded = ((search_len + 7) & (~7)) + 8;
+
+	struct {
+		uint8_t type;
+		uint8_t len;
+		uint8_t pad;
+		uint8_t pad2;
+		uint32_t lifetime;
+		uint8_t name[];
+	} *search = alloca(sizeof(*search) + search_padded);
+	search->type = ND_OPT_DNS_SEARCH;
+	search->len = search_len ? ((sizeof(*search) + search_padded) / 8) : 0;
+	search->pad = 0;
+	search->pad2 = 0;
+	search->lifetime = htonl(2 * MaxRtrAdvInterval);;
+	memcpy(search->name, search_domain, search_len);
+	memset(&search->name[search_len], 0, search_padded - search_len);
+
 
 	size_t routes_cnt = 0;
 	struct {
@@ -422,9 +400,9 @@ static void send_router_advert(struct relayd_event *event)
 		routes[routes_cnt].len = sizeof(*routes) / 8;
 		routes[routes_cnt].prefix = addr->prefix;
 		routes[routes_cnt].flags = 0;
-		if (config->ra_preference < 0)
+		if (iface->route_preference < 0)
 			routes[routes_cnt].flags |= ND_RA_PREF_LOW;
-		else if (config->ra_preference > 0)
+		else if (iface->route_preference > 0)
 			routes[routes_cnt].flags |= ND_RA_PREF_HIGH;
 		routes[routes_cnt].lifetime = htonl(addr->valid);
 		routes[routes_cnt].addr[0] = addr->addr.s6_addr32[0];
@@ -436,10 +414,12 @@ static void send_router_advert(struct relayd_event *event)
 
 	struct iovec iov[] = {{&adv, (uint8_t*)&adv.prefix[cnt] - (uint8_t*)&adv},
 			{&routes, routes_cnt * sizeof(*routes)},
-			{&dns, dnslen}, {&domain, domain_len}};
+			{&dns, (dns_cnt) ? sizeof(dns) : 0},
+			{dns_addr, dns_cnt * sizeof(*dns_addr)},
+			{search, search->len * 8}};
 	struct sockaddr_in6 all_nodes = {AF_INET6, 0, 0, ALL_IPV6_NODES, 0};
-	relayd_forward_packet(router_discovery_event.socket,
-			&all_nodes, iov, 4, iface);
+	relayd_forward_packet(router_event.socket,
+			&all_nodes, iov, ARRAY_SIZE(iov), iface);
 
 	// Rearm timer
 	struct itimerspec val = {{0,0}, {0,0}};
@@ -453,13 +433,16 @@ static void send_router_advert(struct relayd_event *event)
 // Forward router solicitation
 static void forward_router_solicitation(const struct relayd_interface *iface)
 {
+	if (!iface)
+		return;
+
 	struct icmp6_hdr rs = {ND_ROUTER_SOLICIT, 0, 0, {{0}}};
 	struct iovec iov = {&rs, sizeof(rs)};
 	struct sockaddr_in6 all_routers =
 		{AF_INET6, 0, 0, ALL_IPV6_ROUTERS, iface->ifindex};
 
 	syslog(LOG_NOTICE, "Sending RS to %s", iface->ifname);
-	relayd_forward_packet(router_discovery_event.socket,
+	relayd_forward_packet(router_event.socket,
 			&all_routers, &iov, 1, iface);
 }
 
@@ -489,41 +472,44 @@ static void forward_router_advertisement(uint8_t *data, size_t len)
 
 	syslog(LOG_NOTICE, "Got a RA");
 
-	if (config->enable_dhcpv6_server) // Announce stateless DHCP
-		adv->nd_ra_flags_reserved |= ND_RA_FLAG_OTHER;
-
 	// Indicate a proxy, however we don't follow the rest of RFC 4389 yet
 	adv->nd_ra_flags_reserved |= ND_RA_FLAG_PROXY;
 
 	// Forward advertisement to all slave interfaces
 	struct sockaddr_in6 all_nodes = {AF_INET6, 0, 0, ALL_IPV6_NODES, 0};
 	struct iovec iov = {data, len};
-	for (size_t i = 0; i < config->slavecount; ++i) {
+
+	struct relayd_ipaddr addr;
+	struct relayd_interface *iface;
+	list_for_each_entry(iface, &interfaces, head) {
+		if (iface->ra != RELAYD_RELAY || iface->master)
+			continue;
+
 		// Fixup source hardware address option
 		if (mac_ptr)
-			memcpy(mac_ptr, config->slaves[i].mac, 6);
+			relayd_get_interface_mac(iface->ifname, mac_ptr);
 
 		// If we have to rewrite DNS entries
-		if (config->always_rewrite_dns && dns_ptr && dns_count > 0) {
-			const struct in6_addr *rewrite;
-			struct relayd_ipaddr addr;
+		if (iface->always_rewrite_dns && dns_ptr && dns_count > 0) {
+			const struct in6_addr *rewrite = iface->dns;
+			size_t rewrite_cnt = iface->dns_cnt;
 
-			if (!IN6_IS_ADDR_UNSPECIFIED(&config->dnsaddr)) {
-				rewrite = &config->dnsaddr;
-			} else {
-				if (relayd_get_interface_addresses(
-					config->slaves[i].ifindex,
-					&addr, 1) < 1)
-				continue; // Unable to comply
+			if (rewrite_cnt == 0) {
+				if (relayd_get_interface_addresses(iface->ifindex, &addr, 1) < 1)
+					continue; // Unable to comply
+
 				rewrite = &addr.addr;
+				rewrite_cnt = 1;
 			}
 
 			// Copy over any other addresses
-			for (size_t i = 0; i < dns_count; ++i)
-				dns_ptr[i] = *rewrite;
+			for (size_t i = 0; i < dns_count; ++i) {
+				size_t j = (i < rewrite_cnt) ? i : rewrite_cnt - 1;
+				dns_ptr[i] = rewrite[j];
+			}
 		}
 
-		relayd_forward_packet(router_discovery_event.socket,
-			&all_nodes, &iov, 1, &config->slaves[i]);
+		relayd_forward_packet(router_event.socket,
+			&all_nodes, &iov, 1, iface);
 	}
 }

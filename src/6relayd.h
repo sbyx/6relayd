@@ -59,60 +59,75 @@ struct relayd_ipaddr {
 	uint32_t valid;
 };
 
+enum relayd_mode {
+	RELAYD_DISABLED,
+	RELAYD_SERVER,
+	RELAYD_RELAY
+};
+
 
 struct relayd_interface {
+	struct list_head head;
+
 	int ifindex;
 	char ifname[IF_NAMESIZE];
-	uint8_t mac[6];
 	bool external;
 
 	struct relayd_event timer_rs;
 
 	// IPv6 PD
-	struct list_head pd_assignments;
-	struct relayd_ipaddr pd_addr[8];
-	size_t pd_addr_len;
-	bool pd_reconf;
+	struct list_head ia_assignments;
+	struct relayd_ipaddr ia_addr[8];
+	size_t ia_addr_len;
+	bool ia_reconf;
+
+	// Services
+	enum relayd_mode ra;
+	enum relayd_mode dhcpv6;
+	enum relayd_mode ndp;
+
+	// Config
+	bool master;
+	bool always_rewrite_dns;
+	bool deprecate_ula_if_public_avail;
+	bool ra_not_onlink;
+
+	int learn_routes;
+	int default_router;
+	int managed;
+	int route_preference;
+
+	// DNS
+	struct in6_addr *dns;
+	size_t dns_cnt;
+	uint8_t *search;
+	size_t search_len;
+
+	// Config
+	char *dhcpv6_cb;
+	char *dhcpv6_statefile;
+	bool dhcpv6_state_done;
+
+	char* dhcpv6_leases;
+	size_t dhcpv6_lease_len;
+
+	char* static_ndp;
+	size_t static_ndp_len;
 };
+
+extern struct list_head interfaces;
 
 #define RELAYD_MANAGED_MFLAG	1
 #define RELAYD_MANAGED_NO_AFLAG	2
-
-struct relayd_config {
-	// Config
-	bool enable_router_discovery_relay;
-	bool enable_router_discovery_server;
-	bool enable_dhcpv6_relay;
-	bool enable_dhcpv6_server;
-	bool enable_ndp_relay;
-	bool enable_route_learning;
-
-	bool send_router_solicitation;
-	bool always_rewrite_dns;
-	bool always_announce_default_router;
-	bool deprecate_ula_if_public_avail;
-	bool ra_not_onlink;
-	int ra_managed_mode;
-	int ra_preference;
-
-	struct in6_addr dnsaddr;
-	struct relayd_interface master;
-	struct relayd_interface *slaves;
-	size_t slavecount;
-
-	char *dhcpv6_cb;
-	char *dhcpv6_statefile;
-	char** dhcpv6_lease;
-	size_t dhcpv6_lease_len;
-
-	char** static_ndp;
-	size_t static_ndp_len;
-};
 
 
 // Exported main functions
 int relayd_open_rtnl_socket(void);
 int relayd_register_event(struct relayd_event *event);
+
+struct relayd_interface* relayd_open_interface(char* const argv[], int argc);
+void relayd_close_interface(struct relayd_interface *iface);
+
 ssize_t relayd_forward_packet(int socket, struct sockaddr_in6 *dest,
 		struct iovec *iov, size_t iov_len,
 		const struct relayd_interface *iface);
@@ -122,15 +137,17 @@ struct relayd_interface* relayd_get_interface_by_name(const char *name);
 int relayd_get_interface_mtu(const char *ifname);
 int relayd_get_interface_mac(const char *ifname, uint8_t mac[6]);
 struct relayd_interface* relayd_get_interface_by_index(int ifindex);
+struct relayd_interface* relayd_get_master_interface(void);
 void relayd_urandom(void *data, size_t len);
 void relayd_setup_route(const struct in6_addr *addr, int prefixlen,
 		const struct relayd_interface *iface, const struct in6_addr *gw, bool add);
 
 
 // Exported module initializers
-int init_router_discovery_relay(const struct relayd_config *relayd_config);
-int init_dhcpv6_relay(const struct relayd_config *relayd_config);
-int init_ndp_proxy(const struct relayd_config *relayd_config);
+int init_router(void);
+int init_dhcpv6(void);
+int init_ndp(void);
 
-void deinit_router_discovery_relay(void);
-void deinit_ndp_proxy();
+int setup_router_interface(struct relayd_interface *iface, bool enable);
+int setup_dhcpv6_interface(struct relayd_interface *iface, bool enable);
+int setup_ndp_interface(struct relayd_interface *iface, bool enable);

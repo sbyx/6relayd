@@ -16,6 +16,8 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <stdio.h>
+#include <resolv.h>
+#include <getopt.h>
 #include <stddef.h>
 #include <stdlib.h>
 #include <string.h>
@@ -35,12 +37,11 @@
 #include <sys/types.h>
 #include <sys/wait.h>
 
-#include <fcntl.h>
-
 #include "6relayd.h"
 
 
-static struct relayd_config config;
+struct list_head interfaces = LIST_HEAD_INIT(interfaces);
+struct relayd_interface basecfg;
 
 static int epoll, ioctl_sock;
 static size_t epoll_registered = 0;
@@ -53,111 +54,42 @@ static int urandom_fd = -1;
 static int print_usage(const char *name);
 static void set_stop(_unused int signal);
 static void wait_child(_unused int signal);
-static int open_interface(struct relayd_interface *iface,
-		const char *ifname, bool external);
 static void relayd_receive_packets(struct relayd_event *event);
+
+static char *short_options = "ASR:D:NM::E::u:cn::l:a:rt:m:oi:p:dvh";
+static struct option long_options[] = {
+	{"relay", no_argument, NULL, 'A'},
+	{"server", no_argument, NULL, 'S'},
+	{"router-discovery", optional_argument, NULL, 'R'},
+	{"dhcpv6", optional_argument, NULL, 'D'},
+	{"ndp-proxy", no_argument, NULL, 'N'},
+	{"master", optional_argument, NULL, 'M'},
+	{"external", optional_argument, NULL, 'E'},
+	{"override-default", optional_argument, NULL, 'u'},
+	{"deprecate-ula", no_argument, NULL, 'c'},
+	{"dns-server", optional_argument, NULL, 'n'},
+	{"dns-search", required_argument, NULL, 's'},
+	{"leasefile", required_argument, NULL, 'l'},
+	{"lease", required_argument, NULL, 'a'},
+	{"learn-routes", no_argument, NULL, 'r'},
+	{"static-ndp", required_argument, NULL, 't'},
+	{"managed", required_argument, NULL, 'm'},
+	{"not-onlink", no_argument, NULL, 'o'},
+	{"preference", required_argument, NULL, 'i'},
+	{NULL, no_argument, NULL, 0}
+};
 
 
 int main(int argc, char* const argv[])
 {
-	memset(&config, 0, sizeof(config));
-
+	memset(&basecfg, 0, sizeof(basecfg));
 	const char *pidfile = "/var/run/6relayd.pid";
 	bool daemonize = false;
 	int verbosity = 0;
 	int c;
-	while ((c = getopt(argc, argv, "ASR:D:Nsucn::l:a:rt:m:oi:p:dvh")) != -1) {
+
+	while ((c = getopt(argc, argv, short_options))) {
 		switch (c) {
-		case 'A':
-			config.enable_router_discovery_relay = true;
-			config.enable_dhcpv6_relay = true;
-			config.enable_ndp_relay = true;
-			config.send_router_solicitation = true;
-			config.enable_route_learning = true;
-			break;
-
-		case 'S':
-			config.enable_router_discovery_relay = true;
-			config.enable_router_discovery_server = true;
-			config.enable_dhcpv6_relay = true;
-			config.enable_dhcpv6_server = true;
-			break;
-
-		case 'R':
-			config.enable_router_discovery_relay = true;
-			if (!strcmp(optarg, "server"))
-				config.enable_router_discovery_server = true;
-			else if (strcmp(optarg, "relay"))
-				return print_usage(argv[0]);
-			break;
-
-		case 'D':
-			config.enable_dhcpv6_relay = true;
-			if (!strcmp(optarg, "server"))
-				config.enable_dhcpv6_server = true;
-			else if (strcmp(optarg, "relay"))
-				return print_usage(argv[0]);
-			break;
-
-		case 'N':
-			config.enable_ndp_relay = true;
-			break;
-
-		case 's':
-			config.send_router_solicitation = true;
-			break;
-
-		case 'u':
-			config.always_announce_default_router = true;
-			break;
-
-		case 'c':
-			config.deprecate_ula_if_public_avail = true;
-			break;
-
-		case 'n':
-			config.always_rewrite_dns = true;
-			if (optarg)
-				inet_pton(AF_INET6, optarg, &config.dnsaddr);
-			break;
-
-		case 'l':
-			config.dhcpv6_statefile = strtok(optarg, ",");
-			if (config.dhcpv6_statefile)
-				config.dhcpv6_cb = strtok(NULL, ",");
-			break;
-
-		case 'a':
-			config.dhcpv6_lease = realloc(config.dhcpv6_lease,
-					sizeof(char*) * ++config.dhcpv6_lease_len);
-			config.dhcpv6_lease[config.dhcpv6_lease_len - 1] = optarg;
-			break;
-
-		case 'r':
-			config.enable_route_learning = true;
-			break;
-
-		case 't':
-			config.static_ndp = realloc(config.static_ndp,
-					sizeof(char*) * ++config.static_ndp_len);
-			config.static_ndp[config.static_ndp_len - 1] = optarg;
-			break;
-
-		case 'm':
-			config.ra_managed_mode = atoi(optarg);
-			break;
-
-		case 'o':
-			config.ra_not_onlink = true;
-			break;
-
-		case 'i':
-			if (!strcmp(optarg, "low"))
-				config.ra_preference = -1;
-			else if (!strcmp(optarg, "high"))
-				config.ra_preference = 1;
-			break;
-
 		case 'p':
 			pidfile = optarg;
 			break;
@@ -170,7 +102,7 @@ int main(int argc, char* const argv[])
 			verbosity++;
 			break;
 
-		default:
+		case '?':
 			return print_usage(argv[0]);
 		}
 	}
@@ -201,35 +133,39 @@ int main(int argc, char* const argv[])
 		return 2;
 	}
 
-	if (open_interface(&config.master, argv[optind++], false))
-		return 3;
+	int paramc = optind;
+	char* iargv[paramc + 2];
+	memcpy(iargv, argv, sizeof(*iargv) * paramc);
 
-	config.slavecount = argc - optind;
-	config.slaves = calloc(config.slavecount, sizeof(*config.slaves));
-
-	for (size_t i = 0; i < config.slavecount; ++i) {
-		const char *name = argv[optind + i];
+	for (int i = 0; i < argc - paramc; ++i) {
+		char *name = argv[paramc + i];
 		bool external = (name[0] == '~');
 		if (external)
 			++name;
 
-		if (open_interface(&config.slaves[i], name, external))
+		if (name[0] == '.' && name[1] == 0)
+			continue;
+
+		iargv[0] = name;
+		iargv[paramc] = (external) ? "-E1" : "-E0";
+		iargv[paramc + 1] = (i == 0) ? "-M1" : "-M0";
+		struct relayd_interface *iface = relayd_open_interface(iargv, paramc + 2);
+		if (iface)
 			return 3;
 	}
 
 	if ((urandom_fd = open("/dev/urandom", O_RDONLY | O_CLOEXEC)) < 0)
 		return 4;
 
-	struct sigaction sa = {.sa_handler = SIG_IGN};
-	sigaction(SIGUSR1, &sa, NULL);
+	signal(SIGUSR1, SIG_IGN);
 
-	if (init_router_discovery_relay(&config))
+	if (init_router())
 		return 4;
 
-	if (init_dhcpv6_relay(&config))
+	if (init_dhcpv6())
 		return 4;
 
-	if (init_ndp_proxy(&config))
+	if (init_ndp())
 		return 4;
 
 	if (epoll_registered == 0) {
@@ -271,11 +207,6 @@ int main(int argc, char* const argv[])
 	}
 
 	syslog(LOG_WARNING, "Termination requested by signal.");
-
-	deinit_ndp_proxy();
-	deinit_router_discovery_relay();
-	free(config.slaves);
-	close(urandom_fd);
 	return 0;
 }
 
@@ -296,7 +227,6 @@ static int print_usage(const char *name)
 	"	   server	server for DHCPv6 + PD on slaves\n"
 	"	-N		Enable Neighbor Discovery Proxy (NDP)\n"
 	"\nFeature options:\n"
-	"	-s		Send initial RD-Solicitation to <master>\n"
 	"	-u		RD: Assume default router even with ULA only\n"
 	"	-c		RD: ULA-compatibility with broken devices\n"
 	"	-m <mode>	RD: Address Management Level\n"
@@ -336,46 +266,225 @@ static void set_stop(_unused int signal)
 	do_stop = true;
 }
 
+static int configure_interface(struct relayd_interface *iface, int argc, char* const argv[])
+{
+	optind = 1;
+	int c, len;
+	size_t optlen = strlen(optarg);
+	size_t statelen;
+	uint8_t buf[256];
+
+	while ((c = getopt_long(argc, argv, short_options, long_options, NULL)) != -1) {
+		switch (c) {
+		case 'A':
+			iface->ra = RELAYD_RELAY;
+			iface->dhcpv6 = RELAYD_RELAY;
+			iface->ndp = RELAYD_RELAY;
+			iface->learn_routes = true;
+			break;
+
+		case 'S':
+			iface->ra = RELAYD_SERVER;
+			iface->dhcpv6 = RELAYD_SERVER;
+			break;
+
+		case 'R':
+			iface->ra = RELAYD_RELAY;
+			if (!strcmp(optarg, "server"))
+				iface->ra = RELAYD_SERVER;
+			else if (strcmp(optarg, "relay"))
+				return -1;
+			break;
+
+		case 'D':
+			iface->dhcpv6 = RELAYD_RELAY;
+			if (!strcmp(optarg, "server"))
+				iface->dhcpv6 = RELAYD_SERVER;
+			else if (strcmp(optarg, "relay"))
+				return -1;
+			break;
+
+		case 'N':
+			iface->ndp = true;
+			break;
+
+		case 'M':
+			iface->master = true;
+			if (optarg)
+				iface->master = !!atoi(optarg);
+			break;
+
+		case 'E':
+			iface->external = true;
+			if (optarg)
+				iface->external = !!atoi(optarg);
+			break;
+
+		case 'u':
+			iface->default_router = (optarg) ? atoi(optarg) : 1;
+			break;
+
+		case 'c':
+			iface->deprecate_ula_if_public_avail = true;
+			break;
+
+		case 'n':
+			iface->always_rewrite_dns = true;
+			if (optarg) {
+				iface->dns = realloc(iface->dns,
+						++iface->dns_cnt * sizeof(*iface->dns));
+				inet_pton(AF_INET6, optarg, &iface->dns[iface->dns_cnt - 1]);
+			}
+			break;
+
+		case 's':
+			len = dn_comp(optarg, buf, sizeof(buf), NULL, NULL);
+			if (len <= 0)
+				return -1;
+
+			iface->search = realloc(iface->search, iface->search_len + len);
+			memcpy(iface->search + iface->search_len, buf, len);
+			iface->search_len += len;
+			break;
+
+		case 'l':
+			statelen = strcspn(optarg, ",");
+			iface->dhcpv6_statefile = strndup(optarg, statelen);
+			if (optlen > statelen)
+				iface->dhcpv6_cb = strdup(&optarg[statelen + 1]);
+			break;
+
+		case 'a':
+			iface->dhcpv6_leases = realloc(iface->dhcpv6_leases,
+					iface->dhcpv6_lease_len + optlen + 2);
+			memcpy(iface->dhcpv6_leases + iface->dhcpv6_lease_len, optarg, optlen);
+			iface->dhcpv6_lease_len += optlen + 2;
+			iface->dhcpv6_leases[iface->dhcpv6_lease_len - 2] = ' ';
+			iface->dhcpv6_leases[iface->dhcpv6_lease_len - 1] = 0;
+			break;
+
+		case 'r':
+			iface->learn_routes = true;
+			break;
+
+		case 't':
+			iface->static_ndp = realloc(iface->static_ndp,
+					iface->static_ndp_len + optlen + 2);
+			memcpy(iface->static_ndp + iface->static_ndp_len, optarg, optlen);
+			iface->static_ndp_len += optlen + 2;
+			iface->static_ndp[iface->static_ndp_len - 2] = ' ';
+			iface->static_ndp[iface->static_ndp_len - 1] = 0;
+			break;
+
+		case 'm':
+			iface->managed = atoi(optarg);
+			break;
+
+		case 'o':
+			iface->ra_not_onlink = true;
+			break;
+
+		case 'i':
+			if (!strcmp(optarg, "low"))
+				iface->route_preference = -1;
+			else if (!strcmp(optarg, "high"))
+				iface->route_preference = 1;
+			break;
+
+		case '?':
+			return -1;
+		}
+	}
+
+	return 0;
+}
+
 
 // Create an interface context
-static int open_interface(struct relayd_interface *iface,
-		const char *ifname, bool external)
+struct relayd_interface* relayd_open_interface(char* const argv[], int argc)
 {
-	if (ifname[0] == '.' && iface == &config.master)
-		return 0; // Skipped
+	const char *ifname = argv[0];
+	struct relayd_interface *iface = relayd_get_interface_by_name(ifname);
+	if (!iface) {
+		size_t ifname_len = strlen(ifname) + 1;
+		if (ifname_len > IF_NAMESIZE)
+			ifname_len = IF_NAMESIZE;
 
-	int status = 0;
+		struct ifreq ifr;
+		memcpy(ifr.ifr_name, ifname, ifname_len);
 
-	size_t ifname_len = strlen(ifname) + 1;
-	if (ifname_len > IF_NAMESIZE)
-		ifname_len = IF_NAMESIZE;
+		// Detect interface index
+		if (ioctl(ioctl_sock, SIOCGIFINDEX, &ifr) < 0) {
+			syslog(LOG_ERR, "Unable to open interface %s (%s)",
+						ifname, strerror(errno));
+			return NULL;
+		}
 
-	struct ifreq ifr;
-	memcpy(ifr.ifr_name, ifname, ifname_len);
+		iface = malloc(sizeof(*iface));
+		*iface = basecfg;
 
-	// Detect interface index
-	if (ioctl(ioctl_sock, SIOCGIFINDEX, &ifr) < 0)
-		goto err;
+		// Copy allocated buffers
+		if (iface->dns) {
+			iface->dns = malloc(iface->dns_cnt);
+			memcpy(iface->dns, basecfg.dns, iface->dns_cnt);
+		}
 
-	iface->ifindex = ifr.ifr_ifindex;
+		if (iface->search) {
+			iface->search = malloc(iface->search_len);
+			memcpy(iface->search, basecfg.search, iface->dns_cnt);
+		}
 
-	// Detect MAC-address of interface
-	if (ioctl(ioctl_sock, SIOCGIFHWADDR, &ifr) < 0)
-		goto err;
+		if (iface->dhcpv6_cb)
+			iface->dhcpv6_cb = strdup(iface->dhcpv6_cb);
 
-	// Fill interface structure
-	memcpy(iface->mac, ifr.ifr_hwaddr.sa_data, sizeof(iface->mac));
-	memcpy(iface->ifname, ifname, ifname_len);
-	iface->external = external;
+		if (iface->dhcpv6_statefile)
+			iface->dhcpv6_statefile = strdup(iface->dhcpv6_statefile);
 
-	goto out;
+		if (iface->dhcpv6_leases)
+			iface->dhcpv6_leases = strdup(iface->dhcpv6_leases);
 
-err:
-	syslog(LOG_ERR, "Unable to open interface %s (%s)",
-			ifname, strerror(errno));
-	status = -1;
-out:
-	return status;
+		if (iface->static_ndp)
+			iface->static_ndp = strdup(iface->static_ndp);
+
+		// Fill interface structure
+		iface->ifindex = ifr.ifr_ifindex;
+		memcpy(iface->ifname, ifname, ifname_len);
+	}
+
+	struct relayd_interface *master = relayd_get_master_interface();
+	if (configure_interface(iface, argc, argv)) {
+		relayd_close_interface(iface);
+		return NULL;
+	}
+
+	setup_router_interface(iface, true);
+	setup_dhcpv6_interface(iface, true);
+	setup_ndp_interface(iface, true);
+
+	if ((master != iface) && iface->master)
+		relayd_close_interface(master);
+
+	list_add_tail(&iface->head, &interfaces);
+	return iface;
+}
+
+
+void relayd_close_interface(struct relayd_interface *iface)
+{
+	if (iface->head.next)
+		list_del(&iface->head);
+
+	setup_router_interface(iface, false);
+	setup_dhcpv6_interface(iface, false);
+	setup_ndp_interface(iface, false);
+
+	free(iface->dns);
+	free(iface->search);
+	free(iface->dhcpv6_cb);
+	free(iface->dhcpv6_statefile);
+	free(iface->dhcpv6_leases);
+	free(iface->static_ndp);
+	free(iface);
 }
 
 
@@ -553,12 +662,10 @@ ssize_t relayd_get_interface_addresses(int ifindex,
 
 struct relayd_interface* relayd_get_interface_by_index(int ifindex)
 {
-	if (config.master.ifindex == ifindex)
-		return &config.master;
-
-	for (size_t i = 0; i < config.slavecount; ++i)
-		if (config.slaves[i].ifindex == ifindex)
-			return &config.slaves[i];
+	struct relayd_interface *iface;
+	list_for_each_entry(iface, &interfaces, head)
+		if (iface->ifindex == ifindex)
+			return iface;
 
 	return NULL;
 }
@@ -566,12 +673,21 @@ struct relayd_interface* relayd_get_interface_by_index(int ifindex)
 
 struct relayd_interface* relayd_get_interface_by_name(const char *name)
 {
-	if (!strcmp(config.master.ifname, name))
-		return &config.master;
+	struct relayd_interface *iface;
+	list_for_each_entry(iface, &interfaces, head)
+		if (!strcmp(iface->ifname, name))
+			return iface;
 
-	for (size_t i = 0; i < config.slavecount; ++i)
-		if (!strcmp(config.slaves[i].ifname, name))
-			return &config.slaves[i];
+	return NULL;
+}
+
+
+struct relayd_interface* relayd_get_master_interface(void)
+{
+	struct relayd_interface *iface;
+	list_for_each_entry(iface, &interfaces, head)
+		if (iface->master)
+			return iface;
 
 	return NULL;
 }
