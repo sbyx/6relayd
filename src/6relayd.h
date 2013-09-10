@@ -19,7 +19,24 @@
 #include <stdbool.h>
 #include <syslog.h>
 
+#ifdef WITH_UBUS
+
+#ifndef typeof
+#define typeof __typeof
+#endif
+
+#ifndef container_of
+#define container_of(ptr, type, member) (           \
+    (type *)( (char *)ptr - offsetof(type,member) ))
+#endif
+
+#include "libubox/list.h"
+
+#else
+
 #include "list.h"
+
+#endif
 
 #define ARRAY_SIZE(arr) (sizeof(arr) / sizeof((arr)[0]))
 
@@ -142,11 +159,17 @@ void relayd_urandom(void *data, size_t len);
 void relayd_setup_route(const struct in6_addr *addr, int prefixlen,
 		const struct relayd_interface *iface, const struct in6_addr *gw, bool add);
 
+struct relayd_interface* relayd_open_interface(char* const argv[], int argc);
+void relayd_close_interface(struct relayd_interface *iface);
+
 
 // Exported module initializers
 int init_router(void);
 int init_dhcpv6(void);
 int init_ndp(void);
+#ifdef WITH_UBUS
+int init_ubus(void);
+#endif
 
 int setup_router_interface(struct relayd_interface *iface, bool enable);
 int setup_dhcpv6_interface(struct relayd_interface *iface, bool enable);

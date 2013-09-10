@@ -12,7 +12,6 @@
  *
  */
 
-#include "list.h"
 #include "6relayd.h"
 #include "dhcpv6.h"
 #include "md5.h"

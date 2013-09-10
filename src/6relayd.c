@@ -150,7 +150,7 @@ int main(int argc, char* const argv[])
 		iargv[paramc] = (external) ? "-E1" : "-E0";
 		iargv[paramc + 1] = (i == 0) ? "-M1" : "-M0";
 		struct relayd_interface *iface = relayd_open_interface(iargv, paramc + 2);
-		if (iface)
+		if (!iface)
 			return 3;
 	}
 
@@ -167,6 +167,11 @@ int main(int argc, char* const argv[])
 
 	if (init_ndp())
 		return 4;
+
+#ifdef WITH_UBUS
+	if (init_ubus())
+		return 4;
+#endif
 
 	if (epoll_registered == 0) {
 		syslog(LOG_WARNING, "No relays enabled or no slave "

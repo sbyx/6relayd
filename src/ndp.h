@@ -14,7 +14,6 @@
 
 #pragma once
 #include "6relayd.h"
-#include "list.h"
 #include <time.h>
 
 #ifndef SOL_NETLINK

@@ -23,7 +23,6 @@
 #include <sys/timerfd.h>
 #include <net/route.h>
 
-#include "list.h"
 #include "router.h"
 #include "6relayd.h"
 
