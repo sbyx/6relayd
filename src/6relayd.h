@@ -88,11 +88,9 @@ struct relayd_interface {
 
 	int ifindex;
 	char ifname[IF_NAMESIZE];
-	bool external;
 
+	// Runtime data
 	struct relayd_event timer_rs;
-
-	// IPv6 PD
 	struct list_head ia_assignments;
 	struct relayd_ipaddr ia_addr[8];
 	size_t ia_addr_len;
@@ -104,6 +102,7 @@ struct relayd_interface {
 	enum relayd_mode ndp;
 
 	// Config
+	bool external;
 	bool master;
 	bool always_rewrite_dns;
 	bool deprecate_ula_if_public_avail;

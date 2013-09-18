@@ -5,6 +5,7 @@
 
 
 static struct ubus_context *ubus = NULL;
+static struct ubus_subscriber netifd;
 static void handle_ubus(_unused struct relayd_event *event)
 {
 	ubus_handle_event(ubus);
@@ -94,6 +95,15 @@ static struct ubus_object main_object = {
 };
 
 
+static void subscribe_netifd(void)
+{
+	// TODO: watch ubus.object.add events
+	uint32_t id;
+	if (!ubus_lookup_id(ubus, "network.interface", &id))
+		ubus_subscribe(ubus, &netifd, id);
+}
+
+
 int init_ubus(void)
 {
 	if (!(ubus = ubus_connect(NULL))) {
@@ -105,6 +115,8 @@ int init_ubus(void)
 	relayd_register_event(&ubus_event);
 
 	ubus_add_object(ubus, &main_object);
+	subscribe_netifd();
+
 	return 0;
 }
 

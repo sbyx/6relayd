@@ -41,7 +41,6 @@
 
 
 struct list_head interfaces = LIST_HEAD_INIT(interfaces);
-struct relayd_interface basecfg;
 
 static int epoll, ioctl_sock;
 static size_t epoll_registered = 0;
@@ -82,7 +81,6 @@ static struct option long_options[] = {
 
 int main(int argc, char* const argv[])
 {
-	memset(&basecfg, 0, sizeof(basecfg));
 	const char *pidfile = "/var/run/6relayd.pid";
 	bool daemonize = false;
 	int verbosity = 0;
@@ -405,6 +403,18 @@ static int configure_interface(struct relayd_interface *iface, int argc, char* c
 }
 
 
+static void relayd_clean_interface(struct relayd_interface *iface)
+{
+	free(iface->dns);
+	free(iface->search);
+	free(iface->dhcpv6_cb);
+	free(iface->dhcpv6_statefile);
+	free(iface->dhcpv6_leases);
+	free(iface->static_ndp);
+	memset(&iface->ra, 0, sizeof(*iface) - offsetof(struct relayd_interface, ra));
+}
+
+
 // Create an interface context
 struct relayd_interface* relayd_open_interface(char* const argv[], int argc)
 {
@@ -425,35 +435,13 @@ struct relayd_interface* relayd_open_interface(char* const argv[], int argc)
 			return NULL;
 		}
 
-		iface = malloc(sizeof(*iface));
-		*iface = basecfg;
-
-		// Copy allocated buffers
-		if (iface->dns) {
-			iface->dns = malloc(iface->dns_cnt);
-			memcpy(iface->dns, basecfg.dns, iface->dns_cnt);
-		}
-
-		if (iface->search) {
-			iface->search = malloc(iface->search_len);
-			memcpy(iface->search, basecfg.search, iface->dns_cnt);
-		}
-
-		if (iface->dhcpv6_cb)
-			iface->dhcpv6_cb = strdup(iface->dhcpv6_cb);
-
-		if (iface->dhcpv6_statefile)
-			iface->dhcpv6_statefile = strdup(iface->dhcpv6_statefile);
-
-		if (iface->dhcpv6_leases)
-			iface->dhcpv6_leases = strdup(iface->dhcpv6_leases);
-
-		if (iface->static_ndp)
-			iface->static_ndp = strdup(iface->static_ndp);
+		iface = calloc(1, sizeof(*iface));
 
 		// Fill interface structure
 		iface->ifindex = ifr.ifr_ifindex;
 		memcpy(iface->ifname, ifname, ifname_len);
+	} else {
+		relayd_clean_interface(iface);
 	}
 
 	struct relayd_interface *master = relayd_get_master_interface();
@@ -483,12 +471,7 @@ void relayd_close_interface(struct relayd_interface *iface)
 	setup_dhcpv6_interface(iface, false);
 	setup_ndp_interface(iface, false);
 
-	free(iface->dns);
-	free(iface->search);
-	free(iface->dhcpv6_cb);
-	free(iface->dhcpv6_statefile);
-	free(iface->dhcpv6_leases);
-	free(iface->static_ndp);
+	relayd_clean_interface(iface);
 	free(iface);
 }
 
