@@ -25,6 +25,7 @@
 #include <netinet/ip.h>
 #include <sys/ioctl.h>
 #include <sys/timerfd.h>
+#include <arpa/inet.h>
 
 #include "6relayd.h"
 #include "dhcpv4.h"
@@ -33,8 +34,9 @@
 
 static void handle_dhcpv4(void *addr, void *data, size_t len,
 		struct relayd_interface *iface);
-static struct in_addr dhcpv4_lease(struct relayd_interface *iface, enum dhcpv4_msg msg,
-		const uint8_t *mac, struct in_addr reqaddr, const char *hostname);
+static struct dhcpv4_assignment* dhcpv4_lease(struct relayd_interface *iface,
+		enum dhcpv4_msg msg, const uint8_t *mac, struct in_addr reqaddr,
+		const char *hostname);
 
 
 // Create socket and register events
@@ -112,6 +114,49 @@ int setup_dhcpv4_interface(struct relayd_interface *iface, bool enable)
 			}
 
 
+		}
+
+		// Parse static entries
+		if (iface->dhcpv4_lease_len) {
+			char *leases = alloca(iface->dhcpv4_lease_len), *saveptr;
+			memcpy(leases, iface->dhcpv4_leases, iface->dhcpv4_lease_len);
+
+			for (char *lease = strtok_r(leases, " ", &saveptr); lease;
+					lease = strtok_r(NULL, " ", &saveptr)) {
+				char *duid = strtok_r(lease, ":", &saveptr), *assign;
+				size_t duidlen = (duid) ? strlen(duid) : 0;
+				if (duidlen != 12 || !(assign = strtok_r(NULL, ",", &saveptr))) {
+					syslog(LOG_ERR, "Invalid static lease %s", lease);
+					return -1;
+				}
+				duidlen /= 2;
+				char *host = strtok_r(NULL, ",", &saveptr);
+				size_t hostlen = (host) ? strlen(host) + 1 : 1;
+
+				// Construct entry
+				struct dhcpv4_assignment *a = calloc(1, sizeof(*a) + hostlen);
+				inet_pton(AF_INET, assign, &a->addr);
+				a->addr = htonl(a->addr);
+
+				for (size_t j = 0; j < 6; ++j) {
+					char hexnum[3] = {duid[j * 2], duid[j * 2 + 1], 0};
+					a->hwaddr[j] = strtol(hexnum, NULL, 16);
+				}
+
+				// Assign to all interfaces
+				struct dhcpv4_assignment *c;
+				list_for_each_entry(c, &iface->dhcpv4_assignments, head) {
+					if (c->addr > a->addr) {
+						list_add_tail(&a->head, &c->head);
+					} else if (c->addr == a->addr) {
+						// Already an assignment with that number
+						break;
+					}
+				}
+
+				if (!a->head.next)
+					free(a);
+			}
 		}
 
 		// Clean invalid assignments
@@ -250,11 +295,11 @@ static void handle_dhcpv4(void *addr, void *data, size_t len,
 			reqmsg != DHCPV4_MSG_RELEASE)
 		return;
 
-	struct in_addr lease = {INADDR_ANY};
+	struct dhcpv4_assignment *lease = NULL;
 	if (reqmsg != DHCPV4_MSG_INFORM)
 		lease = dhcpv4_lease(iface, reqmsg, req->chaddr, reqaddr, hostname);
 
-	if (!lease.s_addr) {
+	if (!lease) {
 		if (reqmsg == DHCPV4_MSG_REQUEST)
 			msg = DHCPV4_MSG_NAK;
 		else if (reqmsg == DHCPV4_MSG_DISCOVER)
@@ -269,8 +314,8 @@ static void handle_dhcpv4(void *addr, void *data, size_t len,
 	dhcpv4_put(&reply, &cookie, DHCPV4_OPT_MESSAGE, 1, &msg);
 	dhcpv4_put(&reply, &cookie, DHCPV4_OPT_SERVERID, 4, &ifaddr.sin_addr);
 
-	if (lease.s_addr) {
-		reply.yiaddr = lease;
+	if (lease) {
+		reply.yiaddr.s_addr = htonl(lease->addr);
 
 		uint32_t val = htonl(iface->dhcpv4_leasetime);
 		dhcpv4_put(&reply, &cookie, DHCPV4_OPT_LEASETIME, 4, &val);
@@ -282,6 +327,10 @@ static void handle_dhcpv4(void *addr, void *data, size_t len,
 		dhcpv4_put(&reply, &cookie, DHCPV4_OPT_REBIND, 4, &val);
 
 		dhcpv4_put(&reply, &cookie, DHCPV4_OPT_NETMASK, 4, &ifnetmask.sin_addr);
+
+		if (lease->hostname[0])
+			dhcpv4_put(&reply, &cookie, DHCPV4_OPT_HOSTNAME,
+					strlen(lease->hostname), lease->hostname);
 
 		if (!ioctl(sock, SIOCGIFBRDADDR, &ifr)) {
 			struct sockaddr_in *ina = (struct sockaddr_in*)&ifr.ifr_broadaddr;
@@ -375,11 +424,12 @@ static bool dhcpv4_assign(struct relayd_interface *iface, struct dhcpv4_assignme
 }
 
 
-static struct in_addr dhcpv4_lease(struct relayd_interface *iface, enum dhcpv4_msg msg,
-		const uint8_t *mac, struct in_addr reqaddr, const char *hostname)
+static struct dhcpv4_assignment* dhcpv4_lease(struct relayd_interface *iface,
+		enum dhcpv4_msg msg, const uint8_t *mac, struct in_addr reqaddr,
+		const char *hostname)
 {
+	struct dhcpv4_assignment *lease = NULL;
 	uint32_t raddr = ntohl(reqaddr.s_addr);
-	struct in_addr addr = {INADDR_ANY};
 	time_t now = relayd_monotonic_time();
 
 	struct dhcpv4_assignment *c, *n, *a = NULL;
@@ -396,15 +446,23 @@ static struct in_addr dhcpv4_lease(struct relayd_interface *iface, enum dhcpv4_m
 	bool update_state = false;
 	if (msg == DHCPV4_MSG_DISCOVER || msg == DHCPV4_MSG_REQUEST) {
 		bool assigned = !!a;
+		size_t hostlen = strlen(hostname) + 1;
 
 		if (!a) { // Create new binding
-			size_t hostlen = strlen(hostname) + 1;
-
 			a = calloc(1, sizeof(*a) + hostlen);
 			memcpy(a->hwaddr, mac, sizeof(a->hwaddr));
 			memcpy(a->hostname, hostname, hostlen);
 
 			assigned = dhcpv4_assign(iface, a);
+		}
+
+		if (assigned && !a->hostname[0] && hostname) {
+			a = realloc(a, sizeof(*a) + hostlen);
+			memcpy(a->hostname, hostname, hostlen);
+
+			// Fixup list
+			a->head.next->prev = &a->head;
+			a->head.prev->next = &a->head;
 		}
 
 		// Was only a solicitation: mark binding for removal
@@ -417,7 +475,7 @@ static struct in_addr dhcpv4_lease(struct relayd_interface *iface, enum dhcpv4_m
 		}
 
 		if (assigned && a)
-			addr.s_addr = htonl(a->addr);
+			lease = a;
 	} else if (msg == DHCPV4_MSG_RELEASE) {
 		if (a) {
 			a->valid_until = 0;
@@ -432,6 +490,6 @@ static struct in_addr dhcpv4_lease(struct relayd_interface *iface, enum dhcpv4_m
 	if (update_state)
 		dhcpv6_write_statefile();
 
-	return addr;
+	return lease;
 }
 

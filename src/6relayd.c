@@ -247,9 +247,9 @@ static int print_usage(const char *name)
 	"	   medium	medium priority (default)\n"
 	"	   low		low priority\n"
 	"	   high		high priority\n"
-	"	-n [server]	RD/DHCPv6: always rewrite name server\n"
+	"	-n [server]	RD/DHCP: always rewrite name server\n"
 	"	-l <file>,<cmd>	DHCP: IA lease-file and update callback\n"
-	"	-a <duid>:<val>	DHCPv6: IA_NA static assignment\n"
+	"	-a <duid>:<val>	DHCP: IA_NA static assignment\n"
 	"	-r		NDP: learn routes to neighbors\n"
 	"	-t <p>/<l>:<if>	NDP: define a static NDP-prefix on <if>\n"
 	"	slave prefix ~	NDP: don't proxy NDP for hosts and only\n"
@@ -282,6 +282,7 @@ static int configure_interface(struct relayd_interface *iface, int argc, char* c
 	size_t optlen = strlen(optarg);
 	size_t statelen;
 	uint8_t buf[256];
+	const char *d1, *d2;
 
 	while ((c = getopt_long(argc, argv, short_options, long_options, NULL)) != -1) {
 		switch (c) {
@@ -411,12 +412,23 @@ static int configure_interface(struct relayd_interface *iface, int argc, char* c
 			break;
 
 		case 'a':
-			iface->dhcpv6_leases = realloc(iface->dhcpv6_leases,
-					iface->dhcpv6_lease_len + optlen + 2);
-			memcpy(iface->dhcpv6_leases + iface->dhcpv6_lease_len, optarg, optlen);
-			iface->dhcpv6_lease_len += optlen + 2;
-			iface->dhcpv6_leases[iface->dhcpv6_lease_len - 2] = ' ';
-			iface->dhcpv6_leases[iface->dhcpv6_lease_len - 1] = 0;
+			d1 = strchr(optarg, ',');
+			d2 = strchr(optarg, '.');
+			if (d2 && (!d1 || d2 < d1)) {
+				iface->dhcpv4_leases = realloc(iface->dhcpv4_leases,
+						iface->dhcpv4_lease_len + optlen + 2);
+				memcpy(iface->dhcpv4_leases + iface->dhcpv4_lease_len, optarg, optlen);
+				iface->dhcpv4_lease_len += optlen + 2;
+				iface->dhcpv4_leases[iface->dhcpv4_lease_len - 2] = ' ';
+				iface->dhcpv4_leases[iface->dhcpv4_lease_len - 1] = 0;
+			} else {
+				iface->dhcpv6_leases = realloc(iface->dhcpv6_leases,
+						iface->dhcpv6_lease_len + optlen + 2);
+				memcpy(iface->dhcpv6_leases + iface->dhcpv6_lease_len, optarg, optlen);
+				iface->dhcpv6_lease_len += optlen + 2;
+				iface->dhcpv6_leases[iface->dhcpv6_lease_len - 2] = ' ';
+				iface->dhcpv6_leases[iface->dhcpv6_lease_len - 1] = 0;
+			}
 			break;
 
 		case 'r':
@@ -465,6 +477,7 @@ static void relayd_clean_interface(struct relayd_interface *iface)
 	free(iface->dhcpv6_leases);
 	free(iface->static_ndp);
 	free(iface->dhcpv4_dns);
+	free(iface->dhcpv4_leases);
 	memset(&iface->ra, 0, sizeof(*iface) - offsetof(struct relayd_interface, ra));
 }
 

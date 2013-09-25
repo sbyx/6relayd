@@ -124,6 +124,8 @@ struct relayd_interface {
 	struct in_addr *dhcpv4_dns;
 	size_t dhcpv4_dns_cnt;
 	uint32_t dhcpv4_leasetime;
+	char* dhcpv4_leases;
+	size_t dhcpv4_lease_len;
 
 	// DNS
 	struct in6_addr *dns;
