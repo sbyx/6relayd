@@ -36,6 +36,7 @@
 #include <sys/epoll.h>
 #include <sys/types.h>
 #include <sys/wait.h>
+#include <sys/syscall.h>
 
 #include "6relayd.h"
 
@@ -55,12 +56,13 @@ static void set_stop(_unused int signal);
 static void wait_child(_unused int signal);
 static void relayd_receive_packets(struct relayd_event *event);
 
-static char *short_options = "ASR:D:NM::E::u:cn::l:a:rt:m:oi:p:dvh";
+static char *short_options = "ASR::D::4::NM::E::u:cn::l:a:rt:m:oi:p:dvh";
 static struct option long_options[] = {
 	{"relay", no_argument, NULL, 'A'},
 	{"server", no_argument, NULL, 'S'},
 	{"router-discovery", optional_argument, NULL, 'R'},
 	{"dhcpv6", optional_argument, NULL, 'D'},
+	{"dhcpv4", optional_argument, NULL, '4'},
 	{"ndp-proxy", no_argument, NULL, 'N'},
 	{"master", optional_argument, NULL, 'M'},
 	{"external", optional_argument, NULL, 'E'},
@@ -166,6 +168,9 @@ int main(int argc, char* const argv[])
 	if (init_ndp())
 		return 4;
 
+	if (init_dhcpv4())
+		return 4;
+
 #ifdef WITH_UBUS
 	if (init_ubus())
 		return 4;
@@ -229,6 +234,7 @@ static int print_usage(const char *name)
 	"	   relay	standards-compliant relay\n"
 	"	   server	server for DHCPv6 + PD on slaves\n"
 	"	-N		Enable Neighbor Discovery Proxy (NDP)\n"
+	"	-4		Enable DHCPv4-support\n"
 	"\nFeature options:\n"
 	"	-u		RD: Assume default router even with ULA only\n"
 	"	-c		RD: ULA-compatibility with broken devices\n"
@@ -242,7 +248,7 @@ static int print_usage(const char *name)
 	"	   low		low priority\n"
 	"	   high		high priority\n"
 	"	-n [server]	RD/DHCPv6: always rewrite name server\n"
-	"	-l <file>,<cmd>	DHCPv6: IA lease-file and update callback\n"
+	"	-l <file>,<cmd>	DHCP: IA lease-file and update callback\n"
 	"	-a <duid>:<val>	DHCPv6: IA_NA static assignment\n"
 	"	-r		NDP: learn routes to neighbors\n"
 	"	-t <p>/<l>:<if>	NDP: define a static NDP-prefix on <if>\n"
@@ -293,7 +299,7 @@ static int configure_interface(struct relayd_interface *iface, int argc, char* c
 
 		case 'R':
 			iface->ra = RELAYD_RELAY;
-			if (!strcmp(optarg, "server"))
+			if (!optarg || !strcmp(optarg, "server"))
 				iface->ra = RELAYD_SERVER;
 			else if (strcmp(optarg, "relay"))
 				return -1;
@@ -301,10 +307,46 @@ static int configure_interface(struct relayd_interface *iface, int argc, char* c
 
 		case 'D':
 			iface->dhcpv6 = RELAYD_RELAY;
-			if (!strcmp(optarg, "server"))
+			if (!optarg || !strcmp(optarg, "server"))
 				iface->dhcpv6 = RELAYD_SERVER;
 			else if (strcmp(optarg, "relay"))
 				return -1;
+			break;
+
+		case '4':
+			iface->dhcpv4 = RELAYD_SERVER;
+			if (optarg) {
+				buf[sizeof(buf) - 1] = 0;
+				strncpy((char*)buf, optarg, sizeof(buf) - 1);
+
+				char *saveptr, *start = strtok_r((char*)buf, ",", &saveptr);
+				char *end = strtok_r(NULL, ",", &saveptr);
+				char *lifetime = strtok_r(NULL, ",", &saveptr);
+
+				if (start && (!end || !inet_pton(AF_INET, start, &iface->dhcpv4_start) ||
+						!inet_pton(AF_INET, end, &iface->dhcpv4_end)))
+					return -1;
+
+				if (lifetime) {
+					char *endptr = NULL;
+					double value = strtod(lifetime, &endptr);
+					if (!value)
+						return -1;
+
+					if (endptr[0] == 'm')
+						iface->dhcpv4_leasetime = value * 60;
+					else if (endptr[0] == 'h')
+						iface->dhcpv4_leasetime = value * 3600;
+					else if (endptr[0] == 'd')
+						iface->dhcpv4_leasetime = value * 3600 * 24;
+					else if (endptr[0] == 'w')
+						iface->dhcpv4_leasetime = value * 3600 * 24 * 7;
+					else if (endptr[0] == 0 || endptr[0] == 's')
+						iface->dhcpv4_leasetime = value;
+					else
+						return -1;
+				}
+			}
 			break;
 
 		case 'N':
@@ -332,11 +374,22 @@ static int configure_interface(struct relayd_interface *iface, int argc, char* c
 			break;
 
 		case 'n':
-			iface->always_rewrite_dns = true;
+			if (!optarg || strchr(optarg, ':'))
+				iface->always_rewrite_dns = true;
+
 			if (optarg) {
-				iface->dns = realloc(iface->dns,
+				if (strchr(optarg, ':')) {
+					iface->dns = realloc(iface->dns,
 						++iface->dns_cnt * sizeof(*iface->dns));
-				inet_pton(AF_INET6, optarg, &iface->dns[iface->dns_cnt - 1]);
+					if (inet_pton(AF_INET6, optarg, &iface->dns[iface->dns_cnt - 1]))
+						return -1;
+				} else {
+					iface->dns = realloc(iface->dhcpv4_dns,
+						++iface->dhcpv4_dns_cnt * sizeof(*iface->dhcpv4_dns));
+					if (inet_pton(AF_INET, optarg,
+							&iface->dhcpv4_dns[iface->dhcpv4_dns_cnt - 1]))
+						return -1;
+				}
 			}
 			break;
 
@@ -352,9 +405,9 @@ static int configure_interface(struct relayd_interface *iface, int argc, char* c
 
 		case 'l':
 			statelen = strcspn(optarg, ",");
-			iface->dhcpv6_statefile = strndup(optarg, statelen);
+			iface->dhcp_statefile = strndup(optarg, statelen);
 			if (optlen > statelen)
-				iface->dhcpv6_cb = strdup(&optarg[statelen + 1]);
+				iface->dhcp_cb = strdup(&optarg[statelen + 1]);
 			break;
 
 		case 'a':
@@ -407,10 +460,11 @@ static void relayd_clean_interface(struct relayd_interface *iface)
 {
 	free(iface->dns);
 	free(iface->search);
-	free(iface->dhcpv6_cb);
-	free(iface->dhcpv6_statefile);
+	free(iface->dhcp_cb);
+	free(iface->dhcp_statefile);
 	free(iface->dhcpv6_leases);
 	free(iface->static_ndp);
+	free(iface->dhcpv4_dns);
 	memset(&iface->ra, 0, sizeof(*iface) - offsetof(struct relayd_interface, ra));
 }
 
@@ -453,6 +507,7 @@ struct relayd_interface* relayd_open_interface(char* const argv[], int argc)
 	setup_router_interface(iface, true);
 	setup_dhcpv6_interface(iface, true);
 	setup_ndp_interface(iface, true);
+	setup_dhcpv4_interface(iface, true);
 
 	if ((master != iface) && iface->master)
 		relayd_close_interface(master);
@@ -470,6 +525,7 @@ void relayd_close_interface(struct relayd_interface *iface)
 	setup_router_interface(iface, false);
 	setup_dhcpv6_interface(iface, false);
 	setup_ndp_interface(iface, false);
+	setup_dhcpv4_interface(iface, false);
 
 	relayd_clean_interface(iface);
 	free(iface);
@@ -687,6 +743,7 @@ static void relayd_receive_packets(struct relayd_event *event)
 	uint8_t data_buf[RELAYD_BUFFER_SIZE], cmsg_buf[128];
 	union {
 		struct sockaddr_in6 in6;
+		struct sockaddr_in in;
 		struct sockaddr_ll ll;
 		struct sockaddr_nl nl;
 	} addr;
@@ -708,12 +765,17 @@ static void relayd_receive_packets(struct relayd_event *event)
 		// Extract destination interface
 		int destiface = 0;
 		struct in6_pktinfo *pktinfo;
+		struct in_pktinfo *pkt4info;
 		for (struct cmsghdr *ch = CMSG_FIRSTHDR(&msg); ch != NULL &&
 				destiface == 0; ch = CMSG_NXTHDR(&msg, ch)) {
 			if (ch->cmsg_level == IPPROTO_IPV6 &&
 					ch->cmsg_type == IPV6_PKTINFO) {
 				pktinfo = (struct in6_pktinfo*)CMSG_DATA(ch);
 				destiface = pktinfo->ipi6_ifindex;
+			} else if (ch->cmsg_level == IPPROTO_IP &&
+					ch->cmsg_type == IP_PKTINFO) {
+				pkt4info = (struct in_pktinfo*)CMSG_DATA(ch);
+				destiface = pkt4info->ipi_ifindex;
 			}
 		}
 
@@ -733,6 +795,8 @@ static void relayd_receive_packets(struct relayd_event *event)
 			inet_ntop(AF_INET6, &data_buf[8], ipbuf, sizeof(ipbuf));
 		else if (addr.in6.sin6_family == AF_INET6)
 			inet_ntop(AF_INET6, &addr.in6.sin6_addr, ipbuf, sizeof(ipbuf));
+		else if (addr.in.sin_family == AF_INET)
+			inet_ntop(AF_INET, &addr.in.sin_addr, ipbuf, sizeof(ipbuf));
 
 		syslog(LOG_NOTICE, "--");
 		syslog(LOG_NOTICE, "Received %li Bytes from %s%%%s", (long)len,
@@ -746,4 +810,12 @@ static void relayd_receive_packets(struct relayd_event *event)
 void relayd_urandom(void *data, size_t len)
 {
 	read(urandom_fd, data, len);
+}
+
+
+time_t relayd_monotonic_time(void)
+{
+	struct timespec ts;
+	syscall(SYS_clock_gettime, CLOCK_MONOTONIC, &ts);
+	return ts.tv_sec;
 }

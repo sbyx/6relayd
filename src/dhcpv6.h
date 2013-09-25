@@ -143,3 +143,4 @@ size_t dhcpv6_handle_ia(uint8_t *buf, size_t buflen, struct relayd_interface *if
 		const struct sockaddr_in6 *addr, const void *data, const uint8_t *end);
 int dhcpv6_ia_init(int dhcpv6_socket);
 int setup_dhcpv6_ia_interface(struct relayd_interface *iface, bool enable);
+void dhcpv6_write_statefile(void);

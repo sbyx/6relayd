@@ -14,6 +14,7 @@
 
 #include "6relayd.h"
 #include "dhcpv6.h"
+#include "dhcpv4.h"
 #include "md5.h"
 
 #include <time.h>
@@ -25,7 +26,6 @@
 #include <stdlib.h>
 #include <unistd.h>
 #include <arpa/inet.h>
-#include <sys/syscall.h>
 #include <sys/timerfd.h>
 
 
@@ -142,14 +142,6 @@ int setup_dhcpv6_ia_interface(struct relayd_interface *iface, bool enable)
 }
 
 
-static time_t monotonic_time(void)
-{
-	struct timespec ts;
-	syscall(SYS_clock_gettime, CLOCK_MONOTONIC, &ts);
-	return ts.tv_sec;
-}
-
-
 static int send_reconf(struct relayd_interface *iface, struct assignment *assign)
 {
 	struct {
@@ -213,19 +205,19 @@ static int send_reconf(struct relayd_interface *iface, struct assignment *assign
 }
 
 
-static void write_statefile(void)
+void dhcpv6_write_statefile(void)
 {
 	struct relayd_interface *ifacec;
 	list_for_each_entry(ifacec, &interfaces, head)
-		ifacec->dhcpv6_state_done = false;
+		ifacec->dhcp_state_done = false;
 
 	list_for_each_entry(ifacec, &interfaces, head) {
-		if (ifacec->dhcpv6 != RELAYD_SERVER ||
-				!ifacec->dhcpv6_statefile || ifacec->dhcpv6_state_done)
+		if ((ifacec->dhcpv6 != RELAYD_SERVER && ifacec->dhcpv4 != RELAYD_SERVER) ||
+				!ifacec->dhcp_statefile || ifacec->dhcp_state_done)
 			continue;
 
-		time_t now = monotonic_time(), wall_time = time(NULL);
-		int fd = open(ifacec->dhcpv6_statefile, O_CREAT | O_WRONLY | O_CLOEXEC, 0644);
+		time_t now = relayd_monotonic_time(), wall_time = time(NULL);
+		int fd = open(ifacec->dhcp_statefile, O_CREAT | O_WRONLY | O_CLOEXEC, 0644);
 		if (fd < 0)
 			return;
 
@@ -240,55 +232,92 @@ static void write_statefile(void)
 
 		struct relayd_interface *iface;
 		list_for_each_entry(iface, &interfaces, head) {
-			if (iface->dhcpv6 != RELAYD_SERVER ||
-					!iface->dhcpv6_statefile || iface->dhcpv6_state_done ||
-					strcmp(iface->dhcpv6_statefile, ifacec->dhcpv6_statefile))
+			if ((iface->dhcpv6 != RELAYD_SERVER && iface->dhcpv4 != RELAYD_SERVER) ||
+					!iface->dhcp_statefile || iface->dhcp_state_done ||
+					strcmp(iface->dhcp_statefile, ifacec->dhcp_statefile))
 				continue;
 
-			iface->dhcpv6_state_done = true;
-			struct assignment *c;
-			list_for_each_entry(c, &iface->ia_assignments, head) {
-				if (c->clid_len == 0)
-					continue;
+			iface->dhcp_state_done = true;
 
-				char ipbuf[INET6_ADDRSTRLEN];
-				char leasebuf[512];
-				char duidbuf[264];
-				const char hex[] = "0123456789abcdef";
-
-				for (size_t i = 0; i < c->clid_len; ++i) {
-					duidbuf[2 * i] = hex[(c->clid_data[i] >> 4) & 0x0f];
-					duidbuf[2 * i + 1] = hex[c->clid_data[i] & 0x0f];
-				}
-				duidbuf[c->clid_len * 2] = 0;
-
-				// iface DUID iaid hostname lifetime assigned length [addrs...]
-				int l = snprintf(leasebuf, sizeof(leasebuf), "# %s %s %x %s %u %x %u ",
-						iface->ifname, duidbuf, ntohl(c->iaid),
-						(c->hostname ? c->hostname : "-"),
-						(unsigned)(c->valid_until > now ?
-								(c->valid_until - now + wall_time) : 0),
-						c->assigned, (unsigned)c->length);
-
-				struct in6_addr addr;
-				for (size_t i = 0; i < iface->ia_addr_len; ++i) {
-					if (iface->ia_addr[i].prefix > 64)
+			if (iface->dhcpv6 == RELAYD_SERVER) {
+				struct assignment *c;
+				list_for_each_entry(c, &iface->ia_assignments, head) {
+					if (c->clid_len == 0)
 						continue;
 
-					addr = iface->ia_addr[i].addr;
-					if (c->length == 128)
-						addr.s6_addr32[3] = htonl(c->assigned);
-					else
-						addr.s6_addr32[1] |= htonl(c->assigned);
-					inet_ntop(AF_INET6, &addr, ipbuf, sizeof(ipbuf) - 1);
+					char ipbuf[INET6_ADDRSTRLEN];
+					char leasebuf[512];
+					char duidbuf[264];
+					const char hex[] = "0123456789abcdef";
 
-					if (c->length == 128 && c->hostname && i == 0)
+					for (size_t i = 0; i < c->clid_len; ++i) {
+						duidbuf[2 * i] = hex[(c->clid_data[i] >> 4) & 0x0f];
+						duidbuf[2 * i + 1] = hex[c->clid_data[i] & 0x0f];
+					}
+					duidbuf[c->clid_len * 2] = 0;
+
+					// iface DUID iaid hostname lifetime assigned length [addrs...]
+					int l = snprintf(leasebuf, sizeof(leasebuf), "# %s %s %x %s %u %x %u ",
+							iface->ifname, duidbuf, ntohl(c->iaid),
+							(c->hostname ? c->hostname : "-"),
+							(unsigned)(c->valid_until > now ?
+									(c->valid_until - now + wall_time) : 0),
+							c->assigned, (unsigned)c->length);
+
+					struct in6_addr addr;
+					for (size_t i = 0; i < iface->ia_addr_len; ++i) {
+						if (iface->ia_addr[i].prefix > 64)
+							continue;
+
+						addr = iface->ia_addr[i].addr;
+						if (c->length == 128)
+							addr.s6_addr32[3] = htonl(c->assigned);
+						else
+							addr.s6_addr32[1] |= htonl(c->assigned);
+						inet_ntop(AF_INET6, &addr, ipbuf, sizeof(ipbuf) - 1);
+
+						if (c->length == 128 && c->hostname && i == 0)
+							fprintf(fp, "%s\t%s\n", ipbuf, c->hostname);
+
+						l += snprintf(leasebuf + l, sizeof(leasebuf) - l, "%s/%hhu ", ipbuf, c->length);
+					}
+					leasebuf[l - 1] = '\n';
+					fwrite(leasebuf, 1, l, fp);
+				}
+			}
+
+			if (iface->dhcpv4 == RELAYD_SERVER) {
+				struct dhcpv4_assignment *c;
+				list_for_each_entry(c, &iface->dhcpv4_assignments, head) {
+					char ipbuf[INET6_ADDRSTRLEN];
+					char leasebuf[512];
+					char duidbuf[16];
+					const char hex[] = "0123456789abcdef";
+
+					for (size_t i = 0; i < 6; ++i) {
+						duidbuf[2 * i] = hex[(c->hwaddr[i] >> 4) & 0x0f];
+						duidbuf[2 * i + 1] = hex[c->hwaddr[i] & 0x0f];
+					}
+					duidbuf[12] = 0;
+
+					// iface DUID iaid hostname lifetime assigned length [addrs...]
+					int l = snprintf(leasebuf, sizeof(leasebuf), "# %s %s ipv4 %s %u %x 32 ",
+							iface->ifname, duidbuf,
+							(c->hostname ? c->hostname : "-"),
+							(unsigned)(c->valid_until > now ?
+									(c->valid_until - now + wall_time) : 0),
+							c->addr);
+
+					struct in_addr addr = {htonl(c->addr)};
+					inet_ntop(AF_INET, &addr, ipbuf, sizeof(ipbuf) - 1);
+
+					if (c->hostname[0])
 						fprintf(fp, "%s\t%s\n", ipbuf, c->hostname);
 
-					l += snprintf(leasebuf + l, sizeof(leasebuf) - l, "%s/%hhu ", ipbuf, c->length);
+					l += snprintf(leasebuf + l, sizeof(leasebuf) - l, "%s/32 ", ipbuf);
+					leasebuf[l - 1] = '\n';
+					fwrite(leasebuf, 1, l, fp);
 				}
-				leasebuf[l - 1] = '\n';
-				fwrite(leasebuf, 1, l, fp);
 			}
 		}
 
@@ -296,24 +325,24 @@ static void write_statefile(void)
 	}
 
 	list_for_each_entry(ifacec, &interfaces, head)
-		ifacec->dhcpv6_state_done = false;
+		ifacec->dhcp_state_done = false;
 
 	list_for_each_entry(ifacec, &interfaces, head) {
-		if (ifacec->dhcpv6 != RELAYD_SERVER ||
-				!ifacec->dhcpv6_statefile || ifacec->dhcpv6_state_done)
+		if ((ifacec->dhcpv6 != RELAYD_SERVER && ifacec->dhcpv4 != RELAYD_SERVER) ||
+				!ifacec->dhcp_statefile || ifacec->dhcp_state_done)
 			continue;
 
 		struct relayd_interface *iface;
 		list_for_each_entry(iface, &interfaces, head) {
-			if (iface->dhcpv6 != RELAYD_SERVER ||
-					!iface->dhcpv6_cb || iface->dhcpv6_state_done ||
-					strcmp(iface->dhcpv6_cb, ifacec->dhcpv6_cb))
+			if ((iface->dhcpv6 != RELAYD_SERVER && iface->dhcpv4 != RELAYD_SERVER) ||
+					!iface->dhcp_cb || iface->dhcp_state_done ||
+					strcmp(iface->dhcp_cb, ifacec->dhcp_cb))
 				continue;
 
-			iface->dhcpv6_state_done = true;
+			iface->dhcp_state_done = true;
 		}
 
-		char *argv[2] = {ifacec->dhcpv6_cb, NULL};
+		char *argv[2] = {ifacec->dhcp_cb, NULL};
 		if (!vfork()) {
 			execv(argv[0], argv);
 			_exit(128);
@@ -433,7 +462,7 @@ static void update(struct relayd_interface *iface)
 
 	qsort(addr, len, sizeof(*addr), prefixcmp);
 
-	time_t now = monotonic_time();
+	time_t now = relayd_monotonic_time();
 	int minprefix = -1;
 
 	for (int i = 0; i < len; ++i) {
@@ -501,7 +530,7 @@ static void update(struct relayd_interface *iface)
 			}
 		}
 
-		write_statefile();
+		dhcpv6_write_statefile();
 	}
 }
 
@@ -513,7 +542,7 @@ static void reconf_timer(struct relayd_event *event)
 		// Avoid compiler warning
 	}
 
-	time_t now = monotonic_time();
+	time_t now = relayd_monotonic_time();
 	struct relayd_interface *iface;
 	list_for_each_entry(iface, &interfaces, head) {
 		if (iface->dhcpv6 != RELAYD_SERVER || iface->ia_assignments.next == NULL)
@@ -553,7 +582,7 @@ static size_t append_reply(uint8_t *buf, size_t buflen, uint16_t status,
 
 	struct dhcpv6_ia_hdr out = {ia->type, 0, ia->iaid, 0, 0};
 	size_t datalen = sizeof(out);
-	time_t now = monotonic_time();
+	time_t now = relayd_monotonic_time();
 
 	if (status) {
 		struct __attribute__((packed)) {
@@ -726,7 +755,7 @@ static size_t append_reply(uint8_t *buf, size_t buflen, uint16_t status,
 size_t dhcpv6_handle_ia(uint8_t *buf, size_t buflen, struct relayd_interface *iface,
 		const struct sockaddr_in6 *addr, const void *data, const uint8_t *end)
 {
-	time_t now = monotonic_time();
+	time_t now = relayd_monotonic_time();
 	size_t response_len = 0;
 	const struct dhcpv6_client_header *hdr = data;
 	uint8_t *start = (uint8_t*)&hdr[1], *odata;
@@ -925,7 +954,7 @@ size_t dhcpv6_handle_ia(uint8_t *buf, size_t buflen, struct relayd_interface *if
 	}
 
 	if (update_state)
-		write_statefile();
+		dhcpv6_write_statefile();
 
 out:
 	return response_len;

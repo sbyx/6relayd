@@ -96,10 +96,15 @@ struct relayd_interface {
 	size_t ia_addr_len;
 	bool ia_reconf;
 
+	// DHCPv4
+	struct relayd_event dhcpv4_event;
+	struct list_head dhcpv4_assignments;
+
 	// Services
 	enum relayd_mode ra;
 	enum relayd_mode dhcpv6;
 	enum relayd_mode ndp;
+	enum relayd_mode dhcpv4;
 
 	// Config
 	bool external;
@@ -113,6 +118,13 @@ struct relayd_interface {
 	int managed;
 	int route_preference;
 
+	// DHCPv4
+	struct in_addr dhcpv4_start;
+	struct in_addr dhcpv4_end;
+	struct in_addr *dhcpv4_dns;
+	size_t dhcpv4_dns_cnt;
+	uint32_t dhcpv4_leasetime;
+
 	// DNS
 	struct in6_addr *dns;
 	size_t dns_cnt;
@@ -120,9 +132,9 @@ struct relayd_interface {
 	size_t search_len;
 
 	// Config
-	char *dhcpv6_cb;
-	char *dhcpv6_statefile;
-	bool dhcpv6_state_done;
+	char *dhcp_cb;
+	char *dhcp_statefile;
+	bool dhcp_state_done;
 
 	char* dhcpv6_leases;
 	size_t dhcpv6_lease_len;
@@ -161,10 +173,13 @@ void relayd_setup_route(const struct in6_addr *addr, int prefixlen,
 struct relayd_interface* relayd_open_interface(char* const argv[], int argc);
 void relayd_close_interface(struct relayd_interface *iface);
 
+time_t relayd_monotonic_time(void);
+
 
 // Exported module initializers
 int init_router(void);
 int init_dhcpv6(void);
+int init_dhcpv4(void);
 int init_ndp(void);
 #ifdef WITH_UBUS
 int init_ubus(void);
@@ -173,3 +188,4 @@ int init_ubus(void);
 int setup_router_interface(struct relayd_interface *iface, bool enable);
 int setup_dhcpv6_interface(struct relayd_interface *iface, bool enable);
 int setup_ndp_interface(struct relayd_interface *iface, bool enable);
+int setup_dhcpv4_interface(struct relayd_interface *iface, bool enable);
