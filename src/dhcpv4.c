@@ -338,6 +338,11 @@ static void handle_dhcpv4(void *addr, void *data, size_t len,
 		}
 	}
 
+	if (!ioctl(sock, SIOCGIFMTU, &ifr)) {
+		uint16_t mtu = htons(ifr.ifr_mtu);
+		dhcpv4_put(&reply, &cookie, DHCPV4_OPT_MTU, 2, &mtu);
+	}
+
 	if (iface->search) {
 		char b[256];
 		if (dn_expand(iface->search, iface->search + iface->search_len,
@@ -349,6 +354,8 @@ static void handle_dhcpv4(void *addr, void *data, size_t len,
 	}
 
 	dhcpv4_put(&reply, &cookie, DHCPV4_OPT_ROUTER, 4, &ifaddr.sin_addr);
+
+
 
 	if (iface->dhcpv4_dns_cnt == 0)
 		dhcpv4_put(&reply, &cookie, DHCPV4_OPT_DNSSERVER, 4, &ifaddr.sin_addr);

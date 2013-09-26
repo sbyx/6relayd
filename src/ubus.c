@@ -1,11 +1,15 @@
 #include <syslog.h>
 #include <libubus.h>
+#include <arpa/inet.h>
 
 #include "6relayd.h"
+#include "dhcpv6.h"
+#include "dhcpv4.h"
 
 
 static struct ubus_context *ubus = NULL;
 static struct ubus_subscriber netifd;
+static struct blob_buf b;
 static void handle_ubus(_unused struct relayd_event *event)
 {
 	ubus_handle_event(ubus);
@@ -79,9 +83,125 @@ static int handle_disable(_unused struct ubus_context *ctx, _unused struct ubus_
 }
 
 
+static int handle_dhcpv4_leases(struct ubus_context *ctx, _unused struct ubus_object *obj,
+		struct ubus_request_data *req, _unused const char *method,
+		_unused struct blob_attr *msg)
+{
+	blob_buf_init(&b, 0);
+	void *a = blobmsg_open_table(&b, "device");
+	time_t now = relayd_monotonic_time();
+
+	struct relayd_interface *iface;
+	list_for_each_entry(iface, &interfaces, head) {
+		if (iface->dhcpv4 != RELAYD_SERVER)
+			continue;
+
+		void *i = blobmsg_open_table(&b, iface->ifname);
+		void *j = blobmsg_open_array(&b, "leases");
+
+		struct dhcpv4_assignment *lease;
+		list_for_each_entry(lease, &iface->dhcpv4_assignments, head) {
+			if (lease->valid_until < now)
+				continue;
+
+			void *l = blobmsg_open_table(&b, NULL);
+
+			char *buf = blobmsg_alloc_string_buffer(&b, "mac", 13);
+			relayd_hexlify(buf, lease->hwaddr, sizeof(lease->hwaddr));
+			blobmsg_add_string_buffer(&b);
+
+			blobmsg_add_string(&b, "hostname", lease->hostname);
+
+			buf = blobmsg_alloc_string_buffer(&b, "ip", INET_ADDRSTRLEN);
+			struct in_addr addr = {htonl(lease->addr)};
+			inet_ntop(AF_INET, &addr, buf, INET_ADDRSTRLEN);
+			blobmsg_add_string_buffer(&b);
+
+			blobmsg_add_u32(&b, "valid", now - lease->valid_until);
+
+			blobmsg_close_table(&b, l);
+		}
+
+		blobmsg_close_array(&b, j);
+		blobmsg_close_table(&b, i);
+	}
+
+	blobmsg_close_table(&b, a);
+	ubus_send_reply(ctx, req, b.head);
+	return 0;
+}
+
+
+static int handle_dhcpv6_leases(_unused struct ubus_context *ctx, _unused struct ubus_object *obj,
+		_unused struct ubus_request_data *req, _unused const char *method,
+		_unused struct blob_attr *msg)
+{
+	blob_buf_init(&b, 0);
+	void *a = blobmsg_open_table(&b, "device");
+	time_t now = relayd_monotonic_time();
+
+	struct relayd_interface *iface;
+	list_for_each_entry(iface, &interfaces, head) {
+		if (iface->dhcpv6 != RELAYD_SERVER)
+			continue;
+
+		void *i = blobmsg_open_table(&b, iface->ifname);
+		void *j = blobmsg_open_array(&b, "leases");
+
+		struct dhcpv6_assignment *lease;
+		list_for_each_entry(lease, &iface->ia_assignments, head) {
+			if (lease->valid_until < now)
+				continue;
+
+			void *l = blobmsg_open_table(&b, NULL);
+
+			char *buf = blobmsg_alloc_string_buffer(&b, "duid", 264);
+			relayd_hexlify(buf, lease->clid_data, lease->clid_len);
+			blobmsg_add_string_buffer(&b);
+
+			blobmsg_add_u32(&b, "iaid", ntohl(lease->iaid));
+			blobmsg_add_string(&b, "hostname", (lease->hostname) ? lease->hostname : "");
+			blobmsg_add_u32(&b, "assigned", lease->assigned);
+			blobmsg_add_u32(&b, "length", lease->length);
+
+			void *m = blobmsg_open_array(&b, "ipv6");
+			struct in6_addr addr;
+			for (size_t i = 0; i < iface->ia_addr_len; ++i) {
+				if (iface->ia_addr[i].prefix > 64)
+					continue;
+
+				addr = iface->ia_addr[i].addr;
+				if (lease->length == 128)
+					addr.s6_addr32[3] = htonl(lease->assigned);
+				else
+					addr.s6_addr32[1] |= htonl(lease->assigned);
+
+				char *c = blobmsg_alloc_string_buffer(&b, NULL, INET6_ADDRSTRLEN);
+				inet_ntop(AF_INET6, &addr, c, INET6_ADDRSTRLEN);
+				blobmsg_add_string_buffer(&b);
+			}
+			blobmsg_close_table(&b, m);
+
+			blobmsg_add_u32(&b, "valid", now - lease->valid_until);
+
+			blobmsg_close_table(&b, l);
+		}
+
+		blobmsg_close_array(&b, j);
+		blobmsg_close_table(&b, i);
+	}
+
+	blobmsg_close_table(&b, a);
+	ubus_send_reply(ctx, req, b.head);
+	return 0;
+}
+
+
 static struct ubus_method main_object_methods[] = {
 	UBUS_METHOD("enable", handle_enable, dev_policy),
 	UBUS_METHOD("disable", handle_disable, dev_policy),
+	{.name = "get_dhcpv4_leases", .handler = handle_dhcpv4_leases},
+	{.name = "get_dhcpv6_leases", .handler = handle_dhcpv6_leases},
 };
 
 static struct ubus_object_type main_object_type =

@@ -176,6 +176,8 @@ struct relayd_interface* relayd_open_interface(char* const argv[], int argc);
 void relayd_close_interface(struct relayd_interface *iface);
 
 time_t relayd_monotonic_time(void);
+ssize_t relayd_unhexlify(uint8_t *dst, size_t len, const char *src);
+void relayd_hexlify(char *dst, const uint8_t *src, size_t len);
 
 
 // Exported module initializers

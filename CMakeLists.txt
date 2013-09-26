@@ -15,7 +15,7 @@ if(${UBUS})
 endif(${UBUS})
 
 
-add_definitions(-D_GNU_SOURCE -Wall -Werror -Wextra -Wno-extended-offsetof -pedantic)
+add_definitions(-D_GNU_SOURCE -Wall -Werror -Wextra -Wno-extended-offsetof)
 
 add_executable(6relayd src/6relayd.c src/router.c src/dhcpv6.c src/ndp.c src/md5.c src/dhcpv6-ia.c src/dhcpv4.c ${UBUS_SRC})
 target_link_libraries(6relayd resolv ${UBUS_LINK})

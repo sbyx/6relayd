@@ -129,6 +129,21 @@ struct dhcpv6_ia_addr {
 	uint32_t valid;
 } _packed;
 
+struct dhcpv6_assignment {
+	struct list_head head;
+	struct sockaddr_in6 peer;
+	time_t valid_until;
+	time_t reconf_sent;
+	int reconf_cnt;
+	char *hostname;
+	uint8_t key[16];
+	uint32_t assigned;
+	uint32_t iaid;
+	uint8_t length; // length == 128 -> IA_NA, length <= 64 -> IA_PD
+	bool accept_reconf;
+	uint8_t clid_len;
+	uint8_t clid_data[];
+};
 
 
 

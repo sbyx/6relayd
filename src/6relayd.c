@@ -832,3 +832,44 @@ time_t relayd_monotonic_time(void)
 	syscall(SYS_clock_gettime, CLOCK_MONOTONIC, &ts);
 	return ts.tv_sec;
 }
+
+
+static const char hexdigits[] = "0123456789abcdef";
+static const int8_t hexvals[] = {
+    -1, -1, -1, -1, -1, -1, -1, -1, -1, -2, -2, -1, -1, -2, -1, -1,
+    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+    -2, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+     0,  1,  2,  3,  4,  5,  6,  7,  8,  9, -1, -1, -1, -1, -1, -1,
+    -1, 10, 11, 12, 13, 14, 15, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+    -1, 10, 11, 12, 13, 14, 15, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+};
+
+ssize_t relayd_unhexlify(uint8_t *dst, size_t len, const char *src)
+{
+	size_t c;
+	for (c = 0; c < len && src[0] && src[1]; ++c) {
+		int8_t x = (int8_t)*src++;
+		int8_t y = (int8_t)*src++;
+		if (x < 0 || (x = hexvals[x]) < 0
+				|| y < 0 || (y = hexvals[y]) < 0)
+			return -1;
+		dst[c] = x << 4 | y;
+		while (((int8_t)*src) < 0 ||
+				(*src && hexvals[(uint8_t)*src] < 0))
+			src++;
+	}
+
+	return c;
+}
+
+
+void relayd_hexlify(char *dst, const uint8_t *src, size_t len)
+{
+	for (size_t i = 0; i < len; ++i) {
+		*dst++ = hexdigits[src[i] >> 4];
+		*dst++ = hexdigits[src[i] & 0x0f];
+	}
+	*dst = 0;
+}

@@ -29,23 +29,6 @@
 #include <sys/timerfd.h>
 
 
-struct assignment {
-	struct list_head head;
-	struct sockaddr_in6 peer;
-	time_t valid_until;
-	time_t reconf_sent;
-	int reconf_cnt;
-	char *hostname;
-	uint8_t key[16];
-	uint32_t assigned;
-	uint32_t iaid;
-	uint8_t length; // length == 128 -> IA_NA, length <= 64 -> IA_PD
-	bool accept_reconf;
-	uint8_t clid_len;
-	uint8_t clid_data[];
-};
-
-
 static void update(struct relayd_interface *iface);
 static void reconf_timer(struct relayd_event *event);
 static struct relayd_event reconf_event = {-1, reconf_timer, NULL};
@@ -74,9 +57,9 @@ int dhcpv6_ia_init(int dhcpv6_socket)
 int setup_dhcpv6_ia_interface(struct relayd_interface *iface, bool enable)
 {
 	if (!enable && iface->ia_assignments.next) {
-		struct assignment *c;
+		struct dhcpv6_assignment *c;
 		while (!list_empty(&iface->ia_assignments)) {
-			c = list_first_entry(&iface->ia_assignments, struct assignment, head);
+			c = list_first_entry(&iface->ia_assignments, struct dhcpv6_assignment, head);
 			list_del(&c->head);
 			free(c);
 		}
@@ -87,7 +70,7 @@ int setup_dhcpv6_ia_interface(struct relayd_interface *iface, bool enable)
 			INIT_LIST_HEAD(&iface->ia_assignments);
 
 		if (list_empty(&iface->ia_assignments)) {
-			struct assignment *border = calloc(1, sizeof(*border));
+			struct dhcpv6_assignment *border = calloc(1, sizeof(*border));
 			border->length = 64;
 			list_add(&border->head, &iface->ia_assignments);
 		}
@@ -110,19 +93,16 @@ int setup_dhcpv6_ia_interface(struct relayd_interface *iface, bool enable)
 				duidlen /= 2;
 
 				// Construct entry
-				struct assignment *a = calloc(1, sizeof(*a) + duidlen);
+				struct dhcpv6_assignment *a = calloc(1, sizeof(*a) + duidlen);
 				a->clid_len = duidlen;
 				a->length = 128;
 				a->assigned = strtol(assign, NULL, 16);
 				relayd_urandom(a->key, sizeof(a->key));
 
-				for (size_t j = 0; j < duidlen; ++j) {
-					char hexnum[3] = {duid[j * 2], duid[j * 2 + 1], 0};
-					a->clid_data[j] = strtol(hexnum, NULL, 16);
-				}
+				relayd_unhexlify(a->clid_data, duidlen, duid);
 
 				// Assign to all interfaces
-				struct assignment *c;
+				struct dhcpv6_assignment *c;
 				list_for_each_entry(c, &iface->ia_assignments, head) {
 					if (c->length != 128 || c->assigned > a->assigned) {
 						list_add_tail(&a->head, &c->head);
@@ -141,7 +121,7 @@ int setup_dhcpv6_ia_interface(struct relayd_interface *iface, bool enable)
 }
 
 
-static int send_reconf(struct relayd_interface *iface, struct assignment *assign)
+static int send_reconf(struct relayd_interface *iface, struct dhcpv6_assignment *assign)
 {
 	struct {
 		struct dhcpv6_client_header hdr;
@@ -239,7 +219,7 @@ void dhcpv6_write_statefile(void)
 			iface->dhcp_state_done = true;
 
 			if (iface->dhcpv6 == RELAYD_SERVER) {
-				struct assignment *c;
+				struct dhcpv6_assignment *c;
 				list_for_each_entry(c, &iface->ia_assignments, head) {
 					if (c->clid_len == 0)
 						continue;
@@ -247,13 +227,7 @@ void dhcpv6_write_statefile(void)
 					char ipbuf[INET6_ADDRSTRLEN];
 					char leasebuf[512];
 					char duidbuf[264];
-					const char hex[] = "0123456789abcdef";
-
-					for (size_t i = 0; i < c->clid_len; ++i) {
-						duidbuf[2 * i] = hex[(c->clid_data[i] >> 4) & 0x0f];
-						duidbuf[2 * i + 1] = hex[c->clid_data[i] & 0x0f];
-					}
-					duidbuf[c->clid_len * 2] = 0;
+					relayd_hexlify(duidbuf, c->clid_data, c->clid_len);
 
 					// iface DUID iaid hostname lifetime assigned length [addrs...]
 					int l = snprintf(leasebuf, sizeof(leasebuf), "# %s %s %x %s %u %x %u ",
@@ -291,13 +265,7 @@ void dhcpv6_write_statefile(void)
 					char ipbuf[INET6_ADDRSTRLEN];
 					char leasebuf[512];
 					char duidbuf[16];
-					const char hex[] = "0123456789abcdef";
-
-					for (size_t i = 0; i < 6; ++i) {
-						duidbuf[2 * i] = hex[(c->hwaddr[i] >> 4) & 0x0f];
-						duidbuf[2 * i + 1] = hex[c->hwaddr[i] & 0x0f];
-					}
-					duidbuf[12] = 0;
+					relayd_hexlify(duidbuf, c->hwaddr, sizeof(c->hwaddr));
 
 					// iface DUID iaid hostname lifetime assigned length [addrs...]
 					int l = snprintf(leasebuf, sizeof(leasebuf), "# %s %s ipv4 %s %u %x 32 ",
@@ -350,7 +318,7 @@ void dhcpv6_write_statefile(void)
 }
 
 
-static void apply_lease(struct relayd_interface *iface, struct assignment *a, bool add)
+static void apply_lease(struct relayd_interface *iface, struct dhcpv6_assignment *a, bool add)
 {
 	if (a->length > 64)
 		return;
@@ -363,9 +331,9 @@ static void apply_lease(struct relayd_interface *iface, struct assignment *a, bo
 }
 
 
-static bool assign_pd(struct relayd_interface *iface, struct assignment *assign)
+static bool assign_pd(struct relayd_interface *iface, struct dhcpv6_assignment *assign)
 {
-	struct assignment *c;
+	struct dhcpv6_assignment *c;
 	if (iface->ia_addr_len < 1)
 		return false;
 
@@ -409,7 +377,7 @@ static bool assign_pd(struct relayd_interface *iface, struct assignment *assign)
 }
 
 
-static bool assign_na(struct relayd_interface *iface, struct assignment *assign)
+static bool assign_na(struct relayd_interface *iface, struct dhcpv6_assignment *assign)
 {
 	if (iface->ia_addr_len < 1)
 		return false;
@@ -425,7 +393,7 @@ static bool assign_na(struct relayd_interface *iface, struct assignment *assign)
 		uint32_t try;
 		do try = ((uint32_t)rand()) % 0x0fff; while (try < 0x100);
 
-		struct assignment *c;
+		struct dhcpv6_assignment *c;
 		list_for_each_entry(c, &iface->ia_assignments, head) {
 			if (c->assigned > try || c->length != 128) {
 				assign->assigned = try;
@@ -478,14 +446,14 @@ static void update(struct relayd_interface *iface)
 			addr[i].valid += now;
 	}
 
-	struct assignment *border = list_last_entry(&iface->ia_assignments, struct assignment, head);
+	struct dhcpv6_assignment *border = list_last_entry(&iface->ia_assignments, struct dhcpv6_assignment, head);
 	border->assigned = 1 << (64 - minprefix);
 
 	bool change = len != (int)iface->ia_addr_len
 			|| memcmp(iface->ia_addr, addr, len * sizeof(*border));
 
 	if (change) {
-		struct assignment *c;
+		struct dhcpv6_assignment *c;
 		list_for_each_entry(c, &iface->ia_assignments, head)
 			if (c != border)
 				apply_lease(iface, c, false);
@@ -496,7 +464,7 @@ static void update(struct relayd_interface *iface)
 
 	if (change) { // Addresses / prefixes have changed
 		struct list_head reassign = LIST_HEAD_INIT(reassign);
-		struct assignment *c, *d;
+		struct dhcpv6_assignment *c, *d;
 		list_for_each_entry_safe(c, d, &iface->ia_assignments, head) {
 			if (c->clid_len == 0 || c->valid_until < now)
 				continue;
@@ -512,7 +480,7 @@ static void update(struct relayd_interface *iface)
 				send_reconf(iface, c);
 
 				// Leave all other assignments of that client alone
-				struct assignment *a;
+				struct dhcpv6_assignment *a;
 				list_for_each_entry(a, &iface->ia_assignments, head)
 					if (a != c && a->clid_len == c->clid_len &&
 							!memcmp(a->clid_data, c->clid_data, a->clid_len))
@@ -521,7 +489,7 @@ static void update(struct relayd_interface *iface)
 		}
 
 		while (!list_empty(&reassign)) {
-			c = list_first_entry(&reassign, struct assignment, head);
+			c = list_first_entry(&reassign, struct dhcpv6_assignment, head);
 			list_del(&c->head);
 			if (!assign_pd(iface, c)) {
 				c->assigned = 0;
@@ -547,7 +515,7 @@ static void reconf_timer(struct relayd_event *event)
 		if (iface->dhcpv6 != RELAYD_SERVER || iface->ia_assignments.next == NULL)
 			continue;
 
-		struct assignment *a, *n;
+		struct dhcpv6_assignment *a, *n;
 		list_for_each_entry_safe(a, n, &iface->ia_assignments, head) {
 			if (a->valid_until < now) {
 				if ((a->length < 128 && a->clid_len > 0) ||
@@ -573,7 +541,7 @@ static void reconf_timer(struct relayd_event *event)
 
 
 static size_t append_reply(uint8_t *buf, size_t buflen, uint16_t status,
-		const struct dhcpv6_ia_hdr *ia, struct assignment *a,
+		const struct dhcpv6_ia_hdr *ia, struct dhcpv6_assignment *a,
 		struct relayd_interface *iface, bool request)
 {
 	if (buflen < sizeof(*ia) + sizeof(struct dhcpv6_ia_prefix))
@@ -787,7 +755,7 @@ size_t dhcpv6_handle_ia(uint8_t *buf, size_t buflen, struct relayd_interface *if
 	update(iface);
 	bool update_state = false;
 
-	struct assignment *first = NULL;
+	struct dhcpv6_assignment *first = NULL;
 	dhcpv6_for_each_option(start, end, otype, olen, odata) {
 		bool is_pd = (otype == DHCPV6_OPT_IA_PD);
 		bool is_na = (otype == DHCPV6_OPT_IA_NA);
@@ -821,7 +789,7 @@ size_t dhcpv6_handle_ia(uint8_t *buf, size_t buflen, struct relayd_interface *if
 		}
 
 		// Find assignment
-		struct assignment *c, *a = NULL;
+		struct dhcpv6_assignment *c, *a = NULL;
 		list_for_each_entry(c, &iface->ia_assignments, head) {
 			if (c->clid_len == clid_len && !memcmp(c->clid_data, clid_data, clid_len) &&
 					(c->iaid == ia->iaid || c->valid_until < now) &&
