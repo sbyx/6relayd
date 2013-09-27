@@ -331,6 +331,9 @@ static void send_router_advert(struct relayd_event *event)
 		dns_time = 2 * MaxRtrAdvInterval;
 	}
 
+	if (!dns_addr)
+		dns_cnt = 0;
+
 	struct {
 		uint8_t type;
 		uint8_t len;

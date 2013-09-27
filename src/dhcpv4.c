@@ -176,7 +176,7 @@ int setup_dhcpv4_interface(struct relayd_interface *iface, bool enable)
 		iface->dhcpv4_event.socket = sock;
 		iface->dhcpv4_event.handle_dgram = handle_dhcpv4;
 		relayd_register_event(&iface->dhcpv4_event);
-	} else {
+	} else if (iface->dhcpv4_assignments.next) {
 		while (!list_empty(&iface->dhcpv4_assignments)) {
 			struct dhcpv4_assignment *a = list_first_entry(&iface->dhcpv4_assignments,
 					struct dhcpv4_assignment, head);

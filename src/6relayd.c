@@ -56,7 +56,7 @@ static void set_stop(_unused int signal);
 static void wait_child(_unused int signal);
 static void relayd_receive_packets(struct relayd_event *event);
 
-static char *short_options = "ASR::D::4::NM::E::u:cn::l:a:rt:m:oi:p:dvh";
+static char *short_options = "ASR::D::4::NM::E::u::cn::s::l:a:rt:m:oi:p:dvh";
 static struct option long_options[] = {
 	{"relay", no_argument, NULL, 'A'},
 	{"server", no_argument, NULL, 'S'},
@@ -88,7 +88,7 @@ int main(int argc, char* const argv[])
 	int verbosity = 0;
 	int c;
 
-	while ((c = getopt(argc, argv, short_options))) {
+	while ((c = getopt(argc, argv, short_options)) != -1) {
 		switch (c) {
 		case 'p':
 			pidfile = optarg;
@@ -133,27 +133,6 @@ int main(int argc, char* const argv[])
 		return 2;
 	}
 
-	int paramc = optind;
-	char* iargv[paramc + 2];
-	memcpy(iargv, argv, sizeof(*iargv) * paramc);
-
-	for (int i = 0; i < argc - paramc; ++i) {
-		char *name = argv[paramc + i];
-		bool external = (name[0] == '~');
-		if (external)
-			++name;
-
-		if (name[0] == '.' && name[1] == 0)
-			continue;
-
-		iargv[0] = name;
-		iargv[paramc] = (external) ? "-E1" : "-E0";
-		iargv[paramc + 1] = (i == 0) ? "-M1" : "-M0";
-		struct relayd_interface *iface = relayd_open_interface(iargv, paramc + 2);
-		if (!iface)
-			return 3;
-	}
-
 	if ((urandom_fd = open("/dev/urandom", O_RDONLY | O_CLOEXEC)) < 0)
 		return 4;
 
@@ -175,6 +154,27 @@ int main(int argc, char* const argv[])
 	if (init_ubus())
 		return 4;
 #endif
+
+	int paramc = optind;
+	char* iargv[paramc + 2];
+	memcpy(iargv, argv, sizeof(*iargv) * paramc);
+
+	for (int i = 0; i < argc - paramc; ++i) {
+		char *name = argv[paramc + i];
+		bool external = (name[0] == '~');
+		if (external)
+			++name;
+
+		if (name[0] == '.' && name[1] == 0)
+			continue;
+
+		iargv[0] = name;
+		iargv[paramc] = (external) ? "-E1" : "-E0";
+		iargv[paramc + 1] = (i == 0) ? "-M1" : "-M0";
+		struct relayd_interface *iface = relayd_open_interface(iargv, paramc + 2);
+		if (!iface)
+			return 3;
+	}
 
 	if (epoll_registered == 0) {
 		syslog(LOG_WARNING, "No relays enabled or no slave "
@@ -279,12 +279,12 @@ static int configure_interface(struct relayd_interface *iface, int argc, char* c
 {
 	optind = 1;
 	int c, len;
-	size_t optlen = strlen(optarg);
 	size_t statelen;
 	uint8_t buf[256];
 	const char *d1, *d2;
 
 	while ((c = getopt_long(argc, argv, short_options, long_options, NULL)) != -1) {
+		size_t optlen = (optarg) ? strlen(optarg) : 0;
 		switch (c) {
 		case 'A':
 			iface->ra = RELAYD_RELAY;
