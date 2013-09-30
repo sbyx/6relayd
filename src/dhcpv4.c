@@ -91,6 +91,8 @@ int setup_dhcpv4_interface(struct relayd_interface *iface, bool enable)
 
 		// Create a range if not specified
 		struct ifreq ifreq;
+		strncpy(ifreq.ifr_name, iface->ifname, sizeof(ifreq.ifr_name));
+
 		struct sockaddr_in *saddr = (struct sockaddr_in*)&ifreq.ifr_addr;
 		struct sockaddr_in *smask = (struct sockaddr_in*)&ifreq.ifr_netmask;
 		if (!iface->dhcpv4_start.s_addr && !iface->dhcpv4_end.s_addr &&
@@ -393,7 +395,8 @@ static void handle_dhcpv4(void *addr, void *data, size_t len,
 }
 
 
-static bool dhcpv4_assign(struct relayd_interface *iface, struct dhcpv4_assignment *assign)
+static bool dhcpv4_assign(struct relayd_interface *iface,
+		struct dhcpv4_assignment *assign, uint32_t raddr)
 {
 	const unsigned tries = 10;
 	uint32_t start = ntohl(iface->dhcpv4_start.s_addr);
@@ -409,8 +412,16 @@ static bool dhcpv4_assign(struct relayd_interface *iface, struct dhcpv4_assignme
 	// Try to assign up to 100x
 	for (unsigned i = 0; i < tries; ++i) {
 		uint32_t try = (((uint32_t)rand()) % count) + start;
-		if (i == tries - 1)
+		if (i == 0 && raddr >= start && raddr <= end)
+			try = raddr;
+		else if (i == tries - 1)
 			try = start;
+
+		if (list_empty(&iface->dhcpv4_assignments)) {
+			assign->addr = try;
+			list_add(&assign->head, &iface->dhcpv4_assignments);
+			return true;
+		}
 
 		struct dhcpv4_assignment *c;
 		list_for_each_entry(c, &iface->dhcpv4_assignments, head) {
@@ -460,7 +471,7 @@ static struct dhcpv4_assignment* dhcpv4_lease(struct relayd_interface *iface,
 			memcpy(a->hwaddr, mac, sizeof(a->hwaddr));
 			memcpy(a->hostname, hostname, hostlen);
 
-			assigned = dhcpv4_assign(iface, a);
+			assigned = dhcpv4_assign(iface, a, raddr);
 		}
 
 		if (assigned && !a->hostname[0] && hostname) {
