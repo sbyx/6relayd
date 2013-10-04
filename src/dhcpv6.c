@@ -96,6 +96,9 @@ static int create_socket(uint16_t port)
 	val = DHCPV6_HOP_COUNT_LIMIT;
 	setsockopt(sock, IPPROTO_IPV6, IPV6_MULTICAST_HOPS, &val, sizeof(val));
 
+	val = 0;
+	setsockopt(sock, IPPROTO_IPV6, IPV6_MULTICAST_LOOP, &val, sizeof(val));
+
 	struct sockaddr_in6 bind_addr = {AF_INET6, htons(port),
 				0, IN6ADDR_ANY_INIT, 0};
 	if (bind(sock, (struct sockaddr*)&bind_addr, sizeof(bind_addr))) {

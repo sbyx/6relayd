@@ -156,6 +156,9 @@ static int open_icmpv6_socket(struct icmp6_filter *filt,
 	val = 1;
 	setsockopt(sock, IPPROTO_IPV6, IPV6_RECVPKTINFO, &val, sizeof(val));
 
+	val = 0;
+	setsockopt(sock, IPPROTO_IPV6, IPV6_MULTICAST_LOOP, &val, sizeof(val));
+
 	// Filter ICMPv6 package types
 	setsockopt(sock, IPPROTO_ICMPV6, ICMP6_FILTER, filt, sizeof(*filt));
 
