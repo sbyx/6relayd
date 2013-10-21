@@ -413,8 +413,14 @@ static void update(struct relayd_interface *iface)
 	struct assignment *border = list_last_entry(&iface->pd_assignments, struct assignment, head);
 	border->assigned = 1 << (64 - minprefix);
 
-	bool change = len != (int)iface->pd_addr_len
-			|| memcmp(iface->pd_addr, addr, len * sizeof(*border));
+	bool change = len != (int)iface->pd_addr_len;
+	for (int i = 0; !change && i < len; ++i)
+		if (addr[i].addr.s6_addr32[0] != iface->pd_addr[i].addr.s6_addr32[0] ||
+				addr[i].addr.s6_addr32[1] != iface->pd_addr[i].addr.s6_addr32[1] ||
+				(addr[i].preferred > 0) != (iface->pd_addr[i].preferred > 0) ||
+				(addr[i].valid > (uint32_t)now + 7200) !=
+						(iface->pd_addr[i].valid > (uint32_t)now + 7200))
+			change = true;
 
 	if (change) {
 		struct assignment *c;
