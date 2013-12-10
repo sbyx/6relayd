@@ -269,7 +269,10 @@ static void send_router_advert(struct relayd_event *event)
 		.lladdr = {ND_OPT_SOURCE_LINKADDR, 1, {0}},
 		.mtu = {ND_OPT_MTU, 1, 0, htonl(mtu)},
 	};
-	adv.h.nd_ra_flags_reserved = ND_RA_FLAG_OTHER;
+
+	if (config->enable_dhcpv6_server) // Announce stateless DHCP
+	  adv.h.nd_ra_flags_reserved = ND_RA_FLAG_OTHER;
+
 	if (config->ra_managed_mode >= RELAYD_MANAGED_MFLAG)
 		adv.h.nd_ra_flags_reserved |= ND_RA_FLAG_MANAGED;
 
